@@ -1,0 +1,375 @@
+function runPTV(params, nFrames, simImgDir, computedTrackPath, costOfNonAssignment, detectionMode, boundBuffer)
+    cameraMatrix1 = cameraMatrix(params.CameraParameters1, eye(3), [0 0 0]);
+    cameraMatrix2 = cameraMatrix(params.CameraParameters2, ...
+        params.RotationOfCamera2, params.TranslationOfCamera2);
+    F = params.FundamentalMatrix;
+    f1 = params.CameraParameters1.FocalLength;
+    p1 = params.CameraParameters1.PrincipalPoint;
+    pxPitch = 0.0022;
+    intrinsics = [f1(1), 0, p1(1);
+              0, f1(2), p1(2);
+              0, 0, 1]; % mm
+
+    %% vision setting
+    % blob Analyzer
+    tracks = table();
+    lostTracks = table();
+    maxTracks = 400;
+    nextTrackId = 1;
+    maxX = 2592;
+    maxY = 1944;
+    lostTracks = table();
+    %% Main loop
+    for i = 1:nFrames
+        img1Path = sprintf('%s/cam_1_%d.tif', simImgDir, i);
+        img2Path = sprintf('%s/cam_2_%d.tif', simImgDir, i);
+        img1 = imread(img1Path, 'tiff'); 
+        img2 = imread(img2Path, 'tiff');
+
+    %% Detect particles on left and right
+        [particles1, particles2] = detectParticles(img1, img2, detectionMode, boundBuffer);
+
+    %% Predict using Kalman filter
+        for j=1:height(tracks)
+            predictedCentroid = predict(tracks.kalmanFilter{j});
+            tracks.trace{j} = tracks.trace{j}.addPredicted(predictedCentroid);
+            tracks.trace{j} = tracks.trace{j}.addDetected2D(predictedCentroid);
+            tracks.centroid(j, :) = predictedCentroid;
+        end
+
+    %% Assign detection to current tracks   
+        nTracks = height(tracks);
+        nDetections = height(particles1);
+        cost = zeros(nTracks, nDetections);
+%         areaRatio = ones(nTracks, nDetections);
+    %     axMjRatio = zeros(size(areaRatio));
+        for j=1:nTracks
+            cost(j, :) = distance(tracks.kalmanFilter{j}, particles1.centroid);
+%             areaRatio(j, :) = particles1.area ./ tracks.area(j);
+    %         axMjRatio(j, :) = particles1.ecc ./ tracks.ecc(j);
+        end
+        c = particles1.centroid;
+%         inImageFilter = c(:, 1) < 50 |c(:, 2) < 50 | c(:, 1) > 2542 | c(:, 2) > 1894;
+%         areaRatio(:, inImageFilter) = 1; 
+    %     axMjRatio(:, inImageFilter) = 1;
+
+    %     areaRatio(:, isInImage(particles1.centroid', 1:nDetections, 100, 2492, 100, 1844)) = ones(nTracks, 1);
+    %     cost = cost./max(max(cost));
+    %     for j=1:nTracks
+    %         cost(j, :) = cost(j, :) + (repmat(tracks.area{j}, [1 nDetections])/particles1.area);
+        cost(cost > costOfNonAssignment) = Inf;
+%         cost(abs(areaRatio - 1) > 0.15) = Inf;
+    %     cost(abs(axMjRatio - 1) > 0.5) = Inf;
+        idx = munkres(cost);
+        assignments = [1:length(idx); idx]';
+        I = assignments(:, 2) == 0;
+        assignments(I, :) = [];
+        unassignedTracks = find(idx == 0);
+        unassignedDetections = setdiff(1:nDetections, assignments(:, 2));
+
+    %% update Kalman filter with assigned particles
+        numAssignedTracks = size(assignments, 1);
+        for j=1:numAssignedTracks
+            % In assignments the 1st column represents the track index 
+            % and the 2nd column represents the detection index
+            rowId = assignments(j, 1);
+            detectionIdx = assignments(j, 2);
+            centroid = particles1.centroid(detectionIdx, :);
+
+            % Correct the estimate of the object's location using the new detection.
+            % The method overwrites the internal state and covariance of the
+            % Kalman filter object with the corrected measurement (centroid)
+            trackedLocation = correct(tracks.kalmanFilter{rowId}, centroid);
+
+            %% Particle data
+            % Replace the predicted centroid and bounding box with the detection
+    %         tracks.trace{rowId} = tracks.trace{rowId}.updatePredicted(trackedLocation);
+            tracks.trace{rowId} = tracks.trace{rowId}.updateDetected(centroid);
+            tracks.centroid(rowId, :) = centroid;
+            tracks.bbox(rowId, :) = particles1.bbox(detectionIdx, :);
+            tracks.area(rowId, :) = particles1.area(detectionIdx, :);
+
+            tracks.ax_mj(rowId, :) = particles1.ax_mj(detectionIdx, :);
+            tracks.ax_mn(rowId, :) = particles1.ax_mn(detectionIdx, :);
+            tracks.or(rowId, :) = particles1.or(detectionIdx, :);
+            tracks.ecc(rowId, :) = particles1.ecc(detectionIdx, :);
+            tracks.r2(rowId, :) = particles1.r2(detectionIdx, :);
+            tracks.per(rowId, :) = particles1.per(detectionIdx, :);
+
+            % this is needed to link the track ID to the particle ID currently
+            % detected in the frame
+            tracks.currentLeftparticleId(rowId) = ...
+                particles1.id(detectionIdx);
+
+            % set it to 0 here, because the particle position has been replaced
+            % above with the real one
+            tracks.estimated(rowId) = 0;
+
+            % Track data
+            % Update track age (in frames).
+            tracks.age(rowId) = tracks.age(rowId) + 1;
+
+            % Update visibility counter. This is updated only if the track is 
+            % assigned
+            tracks.totalVisibleCount(rowId) = ...
+                tracks.totalVisibleCount(rowId) + 1;
+
+            % Reset counter if the track was invisible before
+            tracks.consecutiveInvisibleCount(rowId) = 0;
+        end   
+    % Create new tracks of particles not assigned (appeared or false alarm)
+        centroids = particles1.centroid(unassignedDetections, :);
+        bboxes = particles1.bbox(unassignedDetections, :);
+        areas = particles1.area(unassignedDetections);
+        ids = particles1.id(unassignedDetections);
+
+        ax_mjs = particles1.ax_mj(unassignedDetections);
+        ax_mns = particles1.ax_mn(unassignedDetections);
+        ors = particles1.or(unassignedDetections);
+        eccs = particles1.ecc(unassignedDetections);
+        r2s = particles1.r2(unassignedDetections);
+        pers = particles1.per(unassignedDetections);
+
+        newTrackCount = 0;
+        for j=1:size(centroids, 1)
+            % when system saturates stop adding new tracks
+            if(height(tracks) >= maxTracks)
+                continue;
+            end
+
+            centroid = centroids(j, :);
+            bbox = bboxes(j, :);
+            area = double(areas(j, :));
+
+            % Create a Kalman filter object for new detections only.
+            kalmanFilter = configureKalmanFilter('ConstantVelocity', centroid, [50 20], [20, 5], 10);
+            trace = particleTrace;
+            trace = trace.addDetected2D(centroid);
+    %         trace = trace.addPredicted(centroid);
+
+            % Create a new track
+            newTrack = table(nextTrackId, {kalmanFilter}, 1, 1, 0, 0, ...
+                 255*rand(3, 1)', ids(j), centroid, bbox, area, [NaN NaN], ...
+                 pers(j), ax_mjs(j), ax_mns(j), ors(j), eccs(j), r2s(j), ...
+                 [NaN NaN NaN], [NaN NaN], 0, false, false,{trace}, ...
+                'VariableNames', {'id', 'kalmanFilter', 'age',  'totalVisibleCount', ...
+                'totalInvisibleCount', 'consecutiveInvisibleCount', 'colour', ...
+                'currentLeftparticleId', 'centroid', 'bbox', 'area', 'rightCoord2D', ...
+                'per', 'ax_mj', 'ax_mn', 'or', 'ecc', 'r2', ...
+                'worldCoordinates', 'length', 'estimated', 'lost', ...
+                'merged', 'trace'
+            });
+
+            % Add it to the array of system.tracks.
+            tracks = [tracks; newTrack];
+
+            % Increment the next id
+            nextTrackId = nextTrackId + 1;
+            newTrackCount = newTrackCount + 1;
+        end
+    % Update unassigned tracks 
+        row = unassignedTracks;
+
+        tracks.age(row) = tracks.age(row) + 1;
+        tracks.totalInvisibleCount(row) = ...
+            tracks.totalInvisibleCount(row) + 1;
+
+        tracks.consecutiveInvisibleCount(row) = ...
+            tracks.consecutiveInvisibleCount(row) + 1;
+
+        newInvisibleTracks = tracks(tracks.consecutiveInvisibleCount == 1, :);
+        if height(newInvisibleTracks) >= 2
+            pDist = zeros(height(newInvisibleTracks), height(particles1));
+            for j=1:height(newInvisibleTracks)
+                pDist(j, :) = vecnorm(particles1.centroid - newInvisibleTracks.centroid(j, :), 2, 2);
+            end
+
+            [~, closestIdx] = min(pDist,[], 2);
+            [C, ia, ic] = unique(closestIdx);
+            % Note the particle who is a merged outcome of two particles
+            % as 'merged' to be later removed
+            if length(C) ~= length(closestIdx)
+    %             drawTrace(img1, newInvisibleTracks);
+                dupIdx = setdiff(1:length(closestIdx), ia);
+                dupVal = closestIdx(dupIdx);
+                dupFilter = ismember(tracks.currentLeftparticleId, dupVal) ...
+                    & tracks.age == 1;
+                tracks.merged(dupFilter) = true;
+    %             close all;
+            end
+        end
+    % Clean lost tracks
+        c = tracks.centroid;
+        minX = 1; maxX = 2592;
+        minY = 1; maxY = 1944;
+        lostThreshold = 5;
+        outImageFilter = (c(:, 1) < minX | c(:, 1) > maxX ...
+                   | c(:, 2) < minY | c(:, 2) > maxY);
+        lostFilter = tracks.consecutiveInvisibleCount == lostThreshold;
+        lostFilter = outImageFilter & lostFilter;
+        if sum(lostFilter) > 0
+            tracks.lost(lostFilter) = true;
+            lostTracks = [lostTracks; tracks(lostFilter, :)];
+            tracks(lostFilter, :) = [];
+        end
+    %     lostTraces = tracks.trace(lostIdx, :).detectedTrace;
+    %     for i=1:height(lostTracks)
+    %        lT = lostTracks(i, :);
+    %        lostIdx = lT.age - lT.consecutiveInvisibleCount;
+    %        lTrace = lT.trace{1}.detectedTrace(lostIdx, :);
+    %        lostCentroid(i, :) = lTrace;
+    %     end
+    %     lostTracks = [lostTracks; tracks(outImageFilter & lostFilter, :)];
+    %     tracks(outImageFilter & lostFilter, :) = [];
+
+    % Triangulate particles for assigned and new tracks
+        % reset all coordinate data for the current tracks
+        h = height(tracks);
+        tracks.rightCoord2D = NaN(h, 2);
+        tracks.worldCoordinates = NaN(h, 3);
+
+        % try matching the particles in the current assigned tracks. Unassigned
+        % tracks have NaN as 'currentLeftparticleIds'.
+        rowsToUpdate = ~isnan(tracks.currentLeftparticleId);
+        % particle IDs of the detections.
+        trackedParticlesIds = tracks.currentLeftparticleId(rowsToUpdate);
+
+        % each row number corresponds to a particle IDs of the detection.
+        trackedParticlesData = tracks(tracks.id == trackedParticlesIds, :);
+
+        if(~isempty(trackedParticlesData))
+            % the rows in trackedParticlesData, trackIds and data match the same
+            % left particle IDs because they have the same sort
+            minDepth = 220;
+            maxDepth = 280;
+
+            for j=1:size(trackedParticlesData, 1)
+                lPts = trackedParticlesData.centroid(j, :);
+                pt3dLeft = (minDepth.*inv(intrinsics) * [lPts(1); lPts(2); 1])';
+                pt3dRight = (maxDepth.*inv(intrinsics) * [lPts(1); lPts(2); 1])';
+                points = projectPoints([pt3dLeft; pt3dRight], cameraMatrix2')';
+
+                minY = max([0, min([points(1, 2), points(2, 2)])-10]);
+                maxY = min([1944, max([points(1, 2), points(2, 2)])+10]);
+                minX = max([0, min([points(1, 1), points(2, 1)])-10]);
+                maxX = min([2592, max([points(1, 1), points(2, 1)])+10]);
+
+                xyFilter = particles2.centroid(:, 1) > minX & particles2.centroid(:, 1) < maxX ...
+                    & particles2.centroid(:, 2) > minY & particles2.centroid(:, 2) < maxY;
+                rightFilteredXY = particles2.centroid(xyFilter, :);
+                if isempty(rightFilteredXY)
+                    continue;
+                end
+                v1 = [points(1, :), 0];
+                v2 = [points(2, :), 0];
+                pt = [rightFilteredXY, zeros(size(rightFilteredXY, 1), 1)];
+                v1_ = repmat(v1, size(pt, 1), 1);
+                v2_ = repmat(v2, size(pt, 1), 1);
+                a = v1_ - v2_;
+                b = pt - v2_;
+                % point to epipolar line distance
+                ptToLineDist = sqrt(sum(cross(a, b, 2).^2, 2))./sqrt(sum(a.^2, 2));
+    %             % size ratio
+    %             areaRatio = particles2.area(xyFilter, :) ./ trackedParticlesData.area(j, :);
+    %             axMjRatio = particles2.ax_mj(xyFilter, :) / trackedParticlesData.ax_mj(j);
+    %             axMnRatio = particles2.ax_mn(xyFilter, :) / trackedParticlesData.ax_mn(j);
+    %             ratios = [areaRatio, axMjRatio, axMnRatio]
+                % gray scale ratio
+                [~, minI] = min(ptToLineDist);
+
+    %             lImg = imread('cam_1_1.tif', 'tiff');
+    %             rImg = imread('cam_2_1.tif', 'tiff');
+    %             imColorL = cat(3, lImg, lImg, lImg);         
+    %             imColorR = cat(3, rImg, rImg, rImg);
+    %             [~, loc] = ismember(rightFilteredXY(minI, :), particles2.centroid, 'rows');
+    %             p = particles2.bbox(loc, :);
+    %             
+    %             figure;
+    %             hold on;
+    % %             subplot(1, 2, 1);
+    %             imshow(img1);
+    %             for q=1:height(tracks)
+    %                 rectangle('Position', tracks.bbox(q, :)', 'FaceColor', 'none', 'EdgeColor', (tracks.colour(q, :)./255)');
+    %             end
+    %             subplot(1, 2, 2);
+    %             imshow(rImg);
+    %             rectangle('Position', p', 'FaceColor', 'none', 'EdgeColor', 'blue');
+    %             rPtsNew(nLeftParticles, :) = [points(1, :) points(2, :)];
+    %             line(rPtsNew(:,[1, 2])',rPtsNew(:,[3, 4])');
+
+    %             xr = particles2
+    %             yr = 
+                [point3d5, r5] = triangulate(lPts, rightFilteredXY(minI, :), params);
+    %             close all;
+    %             tracks.rightCoord2D(rowsToUpdate, :) = particles2(, :); % px
+    %             tracks.worldCoordinates(rowsToUpdate, :) = point3d5;
+            end
+            trackIdx = 6;
+            showTrack = false;
+            if ((showTrack == true) && (height(tracks) >= trackIdx))
+                figure;
+                hold on;
+        %             subplot(1, 2, 1);
+                imshow(img1);
+                tTemp = tracks; %(assignments(:, 1), :);
+        %         for q=1:height(tTemp)
+                    rectangle('Position', tTemp.bbox(trackIdx, :)', 'FaceColor', 'none', 'EdgeColor', (tracks.colour(5, :)./255)');
+        %         end
+
+                close all
+            end
+        end
+    % Estimate particle lengths
+    %  
+    end
+    tracks(tracks.merged == true, :) = [];
+    tracks = [tracks; lostTracks];
+    lostFilter = tracks.lost == true;
+    lostIdx = find(lostFilter);
+    if (size(lostIdx, 1) > 0)
+        lastCentroidIdx = tracks.age(lostFilter) - tracks.consecutiveInvisibleCount(lostFilter);
+        for l=1:size(lostIdx, 1)
+            dT = tracks.trace{lostIdx(l)}.detectedTrace;
+            tracks.centroid(lostIdx(l), :) = dT(lastCentroidIdx(l), :);
+        end
+    end
+
+    save(computedTrackPath, 'tracks');
+    % save('lostTracks.mat', 'lostTracks');
+    % writetable(tracks, 'tracks.dat');
+    % figure; 
+    % hold on;
+    % imshow(imColor);
+    % 
+    % for i=1:height(tracks)
+    % %     imColor(floor(tracks.centroid(i, 2)), floor(tracks.centroid(i, 2)), :) = [0, 0, 255];
+    %     rectangle('Position', tracks.bbox(i, :)', 'FaceColor', 'none', 'EdgeColor', 'blue');
+    % end
+    % 
+    % hold off;
+%     function trackImg = drawTrace(img, tracks)
+%         text_str = cell(height(tracks),1);
+%         pos = zeros(height(tracks), 2);
+% 
+%         figure;
+%         hold on;
+%         % tracks(tracks.totalVisibleCount ~= 2, :) = [];
+%         for i=1:height(tracks)
+%             text_str{i} = ['T: ' num2str(tracks.id(i), '%d')];
+%             trace = tracks.trace{i}.detectedTrace;
+%             pos(i, :) = trace(1, :);
+%         end
+%         trackImg = insertText(img, pos-25, text_str, 'FontSize', 18, ...
+%             'BoxColor', tracks.colour, 'BoxOpacity', 0.4, ...
+%             'TextColor', 'white');
+%         imshow(trackImg, [0 255]);
+%         for i=1:height(tracks)
+%             trace = tracks.trace{i}.detectedTrace; 
+%             line(trace(:, 1), trace(:, 2), ...
+%                 'Color', tracks.colour(i, :)./255, ...
+%                 'LineWidth', 1);
+%         end
+%     end
+
+
+end
