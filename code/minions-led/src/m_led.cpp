@@ -16,10 +16,16 @@
  *   -multiple-clients-on-server-without-multi-threading/
  * 
  *   For our application, we assume at most two clients (cameras). This code
- *   is meant to be used by the LED RPI.
+ *   is meant to be used by the LED RPI0W.
  * 
- *   Once the network is ready, the clients and the server talk in the following
- *   procedure:
+ *   There can be multiple sessions of imaging (e.g., 1hr long session 
+ *   every 6hrs). In each session, LED will start strobing and serve any
+ *   incoming synchronization requests from the clients at any point in time.
+ *   This allows for the system to function even if any of the camera nodes are
+ *   down.
+ * 
+ *   Once the session timer is up, the clients and the server talk in the
+ *   following procedure:
  *      .stepA
  *          - Clients A + B sends their time T1, and server responsds with its 
  *          T2 and T3. 
@@ -29,362 +35,584 @@
  * 
  *      .stepB  
  *          - all clients are done averaging --> server sends time to start
- *          trigger cameras
- *          - clients acknowledges with response data "1"
+ *          trigger cameras and tells when this particular session ends
  * 
  *      .stepC
  *          - sockets are closed and LED strobing begins
+ *   After the session is over, the client might ask for synchronization. In
+ *   that case, the server tells the client that the session is over, and it 
+ *   should wait by sleeping for X amount of time until the next session.
  * 
- * 
+ *   If the deployment is over, the LED server responds with "TERMINATE" to 
+ *   the clients. Both server and clients who receive this messeage will close
+ *   gracefully. Alternatively, if the message does note get transferred, the 
+ *   clients will repeatedly sleep for t seconds, which increases exponentially.
+ *  
  *      
  */
 
+#include <sstream>
+#include <atomic>
 
-#include <stdio.h>  
-#include <string.h>         //strlen  
-#include <stdlib.h>  
-#include <iostream>
-#include <errno.h>  
-#include <unistd.h>         //close  
-#include <arpa/inet.h>      //close  
-#include <sys/types.h>  
-#include <sys/socket.h>  
-#include <netinet/in.h>  
-#include <sys/time.h>       // FD_SET, FD_ISSET, FD_ZERO macros  
-#include <time.h>           // time_sepc
-#include <wiringPi.h>       // for GPIO
-#include <signal.h>         // for 1 second interrupt
-     
 #include "synchronization.h"
 #include "peripheral.h"
 #include "logger.h"
 #include "utility.h"
+#include "network.h"
 
-#include <chrono>
+#define DEBUG 
 
-#define PORT 8080               // Port number for communication
 #define BILLION 1000000000LL    // nanoseconds conversion
-#define LED_PIN 4                  // pin number for LED trigger
-#define PERIOD 1 
+#define PERIOD 1*BILLION 
+#define TERMINATED 1 
+
+// Timer status flag big options
+#define TIMER_L 0b1
+#define TIMER_S 0b10
+#define TIMER_E 0b100
 
 using namespace std;
 
-int count = 0, c_count = 0;
-Peripheral *peripheral = new Peripheral();
-Logger *logger = new Logger();
-struct timespec now;
-string rtc_time = "";
+
+/**
+ * Function Declaration
+ */
+int run_LED();
+static void timer_handler(int sig, siginfo_t *si, void *uc);
+void led_timer_handler();
+void log_timer_handler();
+bool check_depth();
+int start_mission();
+int handle_trigger_request(char timeData[], long long trig_period, int cli_id);
+int handle_session_change(long long trig_period);
+int handle_sync_request(char timeData[], int cli_id);
+void log_internal_msg(string msg);
 
 
 /**
- * Code that runs at timer interrupt
+ * global variables
  */
-void handler(int signo)
-{
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    //auto start = chrono::steady_clock::now();
-    //digitalWrite(TRIG_PIN, HIGH);
-    peripheral->ledOn();
-    // wait for very brief cycles of lopps
-    //for (int i =0; i < E1000; i++) {}
-    usleep(10000);
-    //digitalWrite(TRIG_PIN, LOW);
-    peripheral->ledOff();
-    if (c_count % 500 == 0)
-    {
-        rtc_time = run_script("/home/pi/rtc.sh");
-        c_count = 0;
-    } 
-    else 
-    {
-        rtc_time = "";
-    }
-    peripheral->readData();
-    logger->log(as_nsec(&now), rtc_time, peripheral->getPressure(), peripheral->getTemperature());
-    count ++;
-    c_count++;
-    // do something
-    //auto finish = chrono::steady_clock::now();
-    //cout << chrono::duration_cast<chrono::microseconds>(finish - start).count() << endl;
-}
+Peripheral *peripheral = new Peripheral();
+// peripheral data logger (csv)
+Logger *dataLogger = new Logger();
+// internal message logger (txt)
+Logger *internalLogger = new Logger();
+
+timer_t logTimerID, ledTimerID, imageStartTimerID, imageStopTimerID;
+struct timespec T_start, T_session_start, T_session_end, T_now;
+long long count = 0, c_count = 0;
+long long T_start_n, T_session_start_n, T_session_end_n;
+
+string rtc_time = "";
+ostringstream msg_stream;
+
+// atmoic boolean flags that get modified during timer interrupts
+atomic_bool fStopImaging(true); 
+atomic_bool fRunning(false);
+atomic_bool fSessionChanged(false);
+
+uint8_t timer_status = 0;
+
+// Deployment configuration and status variables
+int cur_session = 1;
+float cur_depth = 0;
+int n_sessions, session_duration, session_period, target_depth,
+    wait_duration, framerate;
 
 
 /**
  * Entrance to the entire code. 
  */
 int main(int argc, char* argv[])   
-{   
-    // Set up wiring Pi for controlling the RPI
-    //wiringPiSetup();
-    //pinMode(LED_PIN, OUTPUT);
+{
+    // Parse configuration input arguments
+    // Conditions for running / terminating the missions
+    // e.g. time up, velocity profile, target_depth, framerate
+    
+    // Default values for the variables in case not provided
+    n_sessions = 1;             // times
+    session_duration = 1;       // minutes
+    session_period = 3;         // minutes
+    target_depth = 5;           // meters
+    wait_duration = 1;          // minutes
+    framerate = 1;              // FPS
+
+    for (int i = 0; i < argc; i++) 
+    {
+        if (strcmp(argv[i], "-n") == 0)
+        {
+            n_sessions = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-s") == 0)
+        {
+            session_duration = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-p") == 0)
+        {
+            session_period = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-d") == 0)
+        {
+            target_depth = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-w") == 0)
+        {
+            wait_duration = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-f") == 0)
+        {
+            framerate = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-h") == 0)
+        {
+            cout << "-n\tnumber of sessions\n\
+-s\tduration of each session (min)\n\
+-p\tperiod of each sessions (min)\n\
+-d\ttarget depth (m) to which the system waits for \"wait duration\"\n\
+-w\twait duration (min)\n\
+-f\tframerate (fps)" << endl;
+            return -1;
+        }
+    }
+    if (session_period < session_duration)
+    {
+        cout << "each session needs to be shorter than the period" << endl;
+        return -1;
+    }
+    session_duration *= 60;     // seconds
+    session_period *= 60;       // seconds
+    wait_duration *= 60;        // seconds
+    // Run the main program
+    run_LED();
+}
+
+
+/**
+ * runLED: The high-level logic of the program.
+ * 
+ *  1. Create timer for logging sensor data regularly
+ *  2. Setup master socket that listens to multiple clients
+
+ *  .loop A: main loop
+ *      a) Start the deployment once reached a configured target depth for 
+ *         the first time. 
+ *      b) start and stop imaging/strobing based on status of each session 
+ *      c) Check for new connections from clients
+ *      .loop B: Check communication with each client
+ *          Handle if
+ *          i) disconnected / error 
+ *          ii)serve synchornization inquiries
+ */
+int run_LED()
+{
+    long long trig_period = (long long) (1/framerate)*BILLION;
+    uint8_t cli_status[2] = {!TERMINATED};    
+
+    // Setup logs
+    rtc_time = run_script("/home/pi/rtc.sh");
+    ostringstream internalLogName, dataLogName;
+    internalLogName << rtc_time << "_log.txt";
+    dataLogName << rtc_time << "_data.csv";
+    dataLogger->open(dataLogName.str());
+    internalLogger->open(internalLogName.str());
+
+    log_internal_msg("The LED booted up");
+    clock_gettime(CLOCK_MONOTONIC, &T_now);
+    makeTimer(&logTimerID, &T_now, 1, 0, &timer_handler);
+
+    // Initialize peripherals    
     if (peripheral->init() == -1)
     {
-        printf("error connecting to the peripherals\n");
+        log_internal_msg("error connecting to the peripherals");
         return -1;
-    } 
-    std::string logName="changme.csv";
-    logger->open(logName);
+    }
 
-    int opt = 1;   
-    int master_socket , addrlen , new_socket , client_socket[30] ,  
-          max_clients = 2 , activity, i , valread , sd;   
-    int max_sd;   
+    int master_socket, addrlen, new_socket, activity, valread, sd;   
+    int max_clients = 2, opt=1;
+    int client_socket[max_clients] = {0};
     struct sockaddr_in address;   
-         
-    char buffer[1025];  //data buffer of 1K  
-         
+    configure_master_socket(&master_socket, &opt, &address);
     //set of socket descriptors  
     fd_set readfds;   
-         
-     
-    //initialise all client_socket[] to 0 so not checked  
-    for (i = 0; i < max_clients; i++)   
-    {   
-        client_socket[i] = 0;   
-    }   
-         
-    //create a master socket  
-    if( (master_socket = socket(AF_INET , SOCK_STREAM , 0)) == 0)   
-    {   
-        perror("socket failed");   
-        exit(EXIT_FAILURE);   
-    }   
-     
-    //set master socket to allow multiple connections ,  
-    //this is just a good habit, it will work without this  
-    if( setsockopt(master_socket, SOL_SOCKET, SO_REUSEADDR, (char *)&opt,  
-          sizeof(opt)) < 0 )   
-    {   
-        perror("setsockopt");   
-        exit(EXIT_FAILURE);   
-    }   
-     
-    //type of socket created  
-    address.sin_family = AF_INET;   
-    address.sin_addr.s_addr = INADDR_ANY;   
-    address.sin_port = htons( PORT );   
-         
-    //bind the socket to localhost port 8888  
-    if (bind(master_socket, (struct sockaddr *)&address, sizeof(address))<0)   
-    {   
-        perror("bind failed");   
-        exit(EXIT_FAILURE);   
-    }   
-    printf("Listener on port %d \n", PORT);   
-         
-    //try to specify maximum of 3 pending connections for the master socket  
-    if (listen(master_socket, 3) < 0)   
-    {   
-        perror("listen");   
-        exit(EXIT_FAILURE);   
-    }   
-         
     //accept the incoming connection  
     addrlen = sizeof(address);   
-    puts("Waiting for connections ...");   
 
-    // Starting time of the trigger that is sent to clients eventually
-    struct timespec T_start = {.tv_sec=0, .tv_nsec=0};
-    // T2 and T3 for synchronization
-    struct timespec T2, T3;
 
-    // simple status indication array for each client
-    // 0: time is not informed
-    // 1: start time is sent
-    // 2. start time is acknowledged and ready to trigger
-    uint8_t sync[2] = {0};    
-
+    char buffer[16];  //data buffer of 16 bytes max  
     // Handle network until both cameras have responded saying that they are
     // synchronized and ready to trigger cameras.
+    // .loop A
     while(1)   
     {   
-        //clear the socket set  
-        FD_ZERO(&readfds);   
-     
-        //add master socket to set  
-        FD_SET(master_socket, &readfds);   
-        max_sd = master_socket;   
-             
-        //add child sockets to set  
-        for ( i = 0 ; i < max_clients ; i++)   
-        {   
-            //socket descriptor  
-            sd = client_socket[i];   
-                 
-            //if valid socket descriptor then add to read list  
-            if(sd > 0)   
-                FD_SET( sd , &readfds);   
-                 
-            //highest file descriptor number, need it for the select function  
-            if(sd > max_sd)   
-                max_sd = sd;   
-        }   
-     
-        //wait for an activity on one of the sockets , timeout is NULL ,  
-        //so wait indefinitely  
-        activity = select( max_sd + 1 , &readfds , NULL , NULL , NULL);   
-       
-        if ((activity < 0) && (errno!=EINTR))   
-        {   
-            printf("select error");   
-        }   
-        //If something happened on the master socket ,  
-        //then its an incoming connection  
-        if (FD_ISSET(master_socket, &readfds))   
-        {   
-            if ((new_socket = accept(master_socket,  
-                    (struct sockaddr *)&address, (socklen_t*)&addrlen))<0)   
-            {  
-                if (errno == EINTR)
-                {
-                    continue; 
-                }
-                else
-                {
-                    perror("accept");   
-                    exit(EXIT_FAILURE);   
-                }
-            }   
-             
-            //inform user of socket number - used in send and receive commands  
-            /*printf("New connection , socket fd is %d , ip is : %s , port : %d\n", 
-                new_socket , inet_ntoa(address.sin_addr) , ntohs(address.sin_port));   
-*/
-            //add new socket to array of sockets  
-            for (i = 0; i < max_clients; i++)   
-            {   
-                //if position is empty  
-                if( client_socket[i] == 0 )   
-                {   
-                    client_socket[i] = new_socket;   
-  //                  printf("Adding to list of sockets as %d\n" , i);   
-                         
-                    break;   
-                }   
-            }   
-        }   
-        //else its some IO operation on some other socket 
-        for (i = 0; i < max_clients; i++)   
+        // a) Check and start mission
+        if (!fRunning && check_depth())
+        {
+            start_mission();            
+            fRunning = true;
+        }
+        // b) Control imaging/lighting based on the sessions
+        if (fSessionChanged)
+        {
+            handle_session_change(trig_period);
+            fSessionChanged = false;
+        }
+        // c) Check Connection
+        int conn_status = handle_connection(&readfds, &master_socket, &address, addrlen, client_socket, max_clients);
+        if (conn_status == 1)
+            continue;
+
+        // .loop B: Handle communicaiton
+        for (int i = 0; i < max_clients; i++)   
         {   
             sd = client_socket[i];   
-                 
-            if (FD_ISSET( sd , &readfds))   
+            // No request, continue
+            if (!(FD_ISSET( sd , &readfds)))
+                continue;
+            
+            // i) Check Comm status  
+            if ((valread = read( sd , buffer, 1024)) == 0)   
             {   
-                //Check if it was for closing , and also read the  
-                //incoming message  
-                if ((valread = read( sd , buffer, 1024)) == 0)   
-                {   
-                    //Somebody disconnected , get his details and print  
-                    getpeername(sd , (struct sockaddr*)&address, (socklen_t*)&addrlen);   
-                    printf("Host disconnected , ip %s , port %d \n",  
-                          inet_ntoa(address.sin_addr) , ntohs(address.sin_port));   
-                         
-                    //Close the socket and mark as 0 in list for reuse  
-                    close( sd );   
-                    client_socket[i] = 0;   
+                //Somebody disconnected , get his details and print  
+                getpeername(sd , (struct sockaddr*)&address, (socklen_t*)&addrlen);   
+                msg_stream.str("");
+                msg_stream << inet_ntoa(address.sin_addr) << " disconnected"; 
+                log_internal_msg(msg_stream.str());
+                //Close the socket and mark as 0 in list for reuse  
+                close( sd );   
+                client_socket[i] = 0;   
+                continue;
+            }
+            else if (valread < 0)
+            {
+                getpeername(sd , (struct sockaddr*)&address, (socklen_t*)&addrlen);   
+                msg_stream.str("");
+                msg_stream << inet_ntoa(address.sin_addr) << " socket error"; 
+                log_internal_msg(msg_stream.str());
+                perror("Socket: ");
+                continue;
+            }
+            // ii) Handle client synchronization inquiries
+            else 
+            {
+                // clients are responding with its T1 value to receive
+                // more time information for synchronization
+                long long rec_T = bytes_to_nsec(buffer);
+                char timeData[16] = {0};
+                if (rec_T > 1) 
+                {
+                    handle_sync_request(timeData, i);
                 }
-                // handle synchronization 
-                else 
-                {   
-                    clock_gettime(CLOCK_MONOTONIC, &T2);
-                    long long rec_T = bytes_to_nsec(buffer);
-                    // clients are responding with its T1 value to receive
-                    // more time information for synchronization
-                    if (rec_T > 1) 
-                    {
-                        usleep(1);
-                        clock_gettime(CLOCK_MONOTONIC, &T3);
-                        char timeData[16] = {0};
-                        char *T2_arr = (char *) &(T2.tv_sec);
-                        char *T3_arr = (char *) &(T3.tv_sec);
-                        for (int i = 0; i < 8; i++) {
-                            timeData[i] = T2_arr[i];
-                            timeData[8+i] = T3_arr[i];
-                        }
-                        //std::cout << T2.tv_sec << std::endl; 
-                        send(sd, timeData, 16, 0);   
-                    }
-                    // client sends 0 to let server know that sychronization is
-                    // complete and it is ready to receive trigger start time.
-                    // convert the status to 1.
-                    else if (rec_T == 0)
-                    {
-
-                        if (sync[0] == 3 && sync[1] == 3)
-                        {
-                            // Provide the last trigger
-                            //std::cout << T_start.tv_sec << std::endl;
-                            //std::cout << count << std::endl;
-                            T_start.tv_sec += (count*PERIOD); 
-                            //std::cout << T_start.tv_sec << std::endl;
-                            count = 0;
-                            send(sd, (char *) &T_start, 8, 0);
-                        }
-                        else
-                        {
-                            sync[i] = 1;
-                            // Only when both clients are ready does the server
-                            // set the start time of the trigger
-                            if (sync[0] == 1 && sync[1] == 1)
-                            {
-                                if (T_start.tv_sec == 0 && T_start.tv_nsec == 0)
-                                {
-                                    long long T2n = as_nsec(&T2);
-                                    // JUNSU: Add 500us delay for start to ensure fast clocks
-                                    // view the LED for now (temporary)
-                                    T2n += (BILLION * PERIOD);
-                                    as_timespec(T2n, &T_start);
-                                } 
-                                // clients request for resynchronization, give them the 
-                                // last trigger
-
-                            }
-                            send(sd, (char *) &T_start, 8, 0);
-                        }
-                    }
-                    // client is ready to trigger cameras, convert the status
-                    // to 2
-                    else if (rec_T == 1)
-                    {
-                        sync[i] = 2;
-                        char timeData[8] = {0};
-                        timeData[4] = 1;
-                        send(sd, timeData, 8, 0); 
-                        if (sync[0] == 2 && sync[1] == 2)
-                        {
-  
-                            // Create a repeated timer interrupt that happens every second starting at
-                            // T_start
-                            timer_t t_id;
-                            struct itimerspec tim_spec = {.it_interval= {.tv_sec=PERIOD,.tv_nsec=0},
-                                            .it_value = T_start};
-                            std::cout << "ST: " << T_start.tv_sec << ", " << T_start.tv_nsec << std::endl;
-
-                            struct sigaction act;
-                            sigset_t set;
-
-                            sigemptyset( &set );
-                            sigaddset( &set, SIGALRM );
-
-                            act.sa_flags = SA_RESTART;
-                            act.sa_mask = set;
-                            act.sa_handler = &handler;
-
-                            sigaction( SIGALRM, &act, NULL );
-
-                            if (timer_create(CLOCK_MONOTONIC, NULL, &t_id))
-                                perror("timer_create");
-
-                            if (timer_settime(t_id, TIMER_ABSTIME, &tim_spec, NULL))
-                                perror("timer_settime");
-                            sync[0] = 3;
-                            sync[1] = 3;
-                        }
-                    }
+                // client sends 0 to let server know that sychronization is
+                // complete and it is ready to receive trigger start time.
+                else if (rec_T == 0)
+                {
+                    handle_trigger_request(timeData, trig_period, i);
                 }
-            }   
-        }   
+                // Send the response
+                int send_status = send(sd, timeData, 16, 0);   
+                if (send_status == -1) 
+                {
+                    perror("\nError is ");
+                }
+            }
+        }
     }   
-    logger->close();
+    // The deployment has terminated. Wrap up
+    timer_delete(logTimerID);
+    dataLogger->close();
+    log_internal_msg("Mission Complete. Bye Bye");
+    internalLogger->close();
     return 0;   
 }
+
+
+/**
+ * timer_handler: When there is a timer interrupt, identify which timer,
+ * and serve accordingly. In total, there are four possible timers. LED strobe,
+ * sensor data log, stop imaging and start imaging
+ */
+static void timer_handler(int sig, siginfo_t *si, void *uc)
+{
+    timer_t *tidp;
+    tidp = (timer_t *) si->si_value.sival_ptr;
+    // LED
+    if ( *tidp == ledTimerID )
+    {
+        led_timer_handler();
+    }
+    // Log
+    else if ( *tidp == logTimerID)
+    {
+        log_timer_handler();
+    }
+    else if ( *tidp == imageStopTimerID )
+    {
+        // Indicate that the session is over
+        fStopImaging = true;
+        fSessionChanged = true;
+        cur_session ++;
+    }
+    else if (*tidp == imageStartTimerID)
+    {
+        // Indicate that the session is starting
+        fStopImaging = false;
+        fSessionChanged = true;
+    }
+}
+
+
+/**
+ * log_timer_handler: write rtc and peripheral data to a log csv file
+ */
+void log_timer_handler()
+{
+    // Update with new RTC value to track internal clock drift
+    if (c_count % 600 == 0)
+    {
+        rtc_time = run_script("/home/pi/rtc.sh");
+        c_count = 0;
+    } 
+    else 
+    {
+        rtc_time = "0";
+    }
+    peripheral->readData();
+    cur_depth = peripheral->getDepth();
+    dataLogger->logData(rtc_time, peripheral->getPressure(), peripheral->getTemperature());
+    c_count++;
+}
+
+
+/**
+ * led_timer_handler: produce 10ms long periodic strobing
+ */
+void led_timer_handler()
+{
+    peripheral->ledOn();
+    usleep(10000);
+
+    peripheral->ledOff();
+    count ++;
+}
+
+/**
+ * check_depth: check if the target depth has been passed
+ */
+bool check_depth()
+{
+    #ifdef DEBUG
+    return true;
+    #else
+    return cur_depth > target_depth;
+    #endif 
+}
+
+
+/**
+ * handle_sync_request:
+ *      char timeData[]: char array to be modified with appropriate response
+ *                       it is 16-bit long
+ *      int cli_id: internal id of the client
+ * 
+ * Respond appropriately to a synchronization request depending on the status
+ * of the deployemt (session running/stopped or terminated)
+ * 
+ */
+int handle_sync_request(char timeData[], int cli_id)
+{
+    // T2 for synchronization
+    struct timespec T2;
+    // handle synchronization 
+    clock_gettime(CLOCK_MONOTONIC, &T2);
+
+    // if the deployment has not terminated
+    if (cur_session <= n_sessions)
+    {
+        // if the target depth has been reached
+        if (fRunning)
+        {
+            // if session is running
+            if (!fStopImaging)
+            {
+                // T3 for synchronization
+                struct timespec T3;
+                clock_gettime(CLOCK_MONOTONIC, &T3);
+                char *T2_arr = (char *) &(T2.tv_sec);
+                char *T3_arr = (char *) &(T3.tv_sec);
+                // Respond with T2 and T3 
+                for (int i = 0; i < 8; i++) 
+                {
+                    timeData[i] = T2_arr[i];
+                    timeData[8+i] = T3_arr[i];
+                }
+            }
+            else
+            {
+                // Find the waiting duration until the next session
+                struct timespec T_wait; 
+                long long T_wait_n = (T_session_start_n + (cur_session-1)*session_period*BILLION) - as_nsec(&T2);
+
+                msg_stream.str("");
+                msg_stream << "Client " << cli_id  << " sleep for " << T_wait_n/BILLION << " seconds";
+                log_internal_msg(msg_stream.str());
+                
+                // Respond wait duration 
+                as_timespec(T_wait_n, &T_wait);
+                char *T_wait_arr = (char *) &(T_wait.tv_sec);
+                for (int j = 0; j < 8; j++) 
+                {
+                    timeData[8+j] = T_wait_arr[j];
+                }
+            }
+        }
+    }                   
+    // Terminated     
+    else 
+    {
+        msg_stream.str("");
+        msg_stream << "Client " << cli_id  << " terminate";
+        log_internal_msg(msg_stream.str());
+        // Respond with (1, 0), which means to terminate
+        timeData[4] = 1;
+        //cli_status[i] = TERMINATED;
+        // If both cameras are informed, we shut down the LED unit as well.
+        /*if (cli_status[0] == TERMINATED && cli_status[1] == TERMINATED)
+            break;*/
+    }
+}
+
+
+/**
+ * handle_trigger_request:
+ *      timeData[]: char array with modified response
+ *      trig_period: LED trigger period
+ *      cli_id: internal id of the client
+ * 
+ * The client asks for the last trigger for synchronization. 
+ */
+int handle_trigger_request(char timeData[], long long trig_period, int cli_id)
+{
+    // Provide the last trigger*/
+    struct timespec T_last_trig;
+    // Add however many triggers have been made so far
+    long long last_trigger = T_start_n + (count * trig_period);
+    as_timespec(last_trigger, &T_last_trig);
+
+    // Tell them when this session is expected to end
+    long long T_end_n = T_session_end_n + (cur_session-1)*session_period*BILLION;
+    struct timespec T_cur_end;
+    as_timespec(T_end_n, &T_cur_end);
+
+    // Formulate the response 
+    char *data1 = (char *) &(T_last_trig);
+    char *data2 = (char *) &(T_cur_end);
+    for (int i = 0; i < 8; i++) 
+    {
+        timeData[i] = data1[i];
+        timeData[8+i] = data2[i];
+    }
+
+    // Log
+    msg_stream.str("");
+    msg_stream << "Client " << cli_id  << ": last trigger (" << last_trigger << ", " << T_end_n << ")";
+    log_internal_msg(msg_stream.str());
+}
+
+/**
+ * handle_session_change: 
+ *      trig_period: LED trigger period
+ * 
+ * Change the timers that corresponds to the recent session change
+ */
+int handle_session_change(long long trig_period)
+{
+    // Session Stop
+    if (fStopImaging)
+    {
+        log_internal_msg("Session stopped");
+        // Disarm the LED timer
+        if (timer_status & TIMER_L)                
+        {
+            log_internal_msg("Disarm LED alarm");
+            timer_delete(ledTimerID);
+            timer_status &= (~TIMER_L);
+        }
+        // Termination
+        if (cur_session > n_sessions)
+        {
+            log_internal_msg("Mission Over - Terminate");
+            // Handle Termination
+            // all of the sessions have been made. Stop taking images
+            if (timer_status & TIMER_S)
+            {
+                log_internal_msg("Disarm Image start alarm");
+                timer_delete(imageStartTimerID);
+            }
+            if (timer_status & TIMER_E)
+            {
+                log_internal_msg("Disarm IMage end alarm");
+                timer_delete(imageStopTimerID);
+            }
+            timer_status &= ~(TIMER_S | TIMER_E);
+        }
+    }
+    // Session start
+    else
+    {
+        count = 0;
+        clock_gettime(CLOCK_MONOTONIC, &T_now);
+
+        // Setup start time of this sesssion
+        T_start_n = as_nsec(&T_now) + 2*BILLION;
+        as_timespec(T_start_n, &T_start);
+        struct timespec T_Period = {.tv_sec=0, .tv_nsec=0};
+        as_timespec(trig_period, &T_Period);
+
+        // Make a timer for LED strobing
+        makeTimer(&ledTimerID, &T_start, T_Period.tv_sec, T_Period.tv_nsec, &timer_handler);
+        timer_status |= TIMER_L;
+
+        // Log
+        msg_stream.str("");
+        msg_stream.clear();
+        msg_stream << "Start session " << cur_session;
+        log_internal_msg(msg_stream.str());
+    }
+}
+
+
+/**
+ * start_mission: Once the target depth has been reached, set up the 
+ * session reltaed timers
+ */
+int start_mission()
+{
+    // Timestamp current time
+    clock_gettime(CLOCK_MONOTONIC, &T_now);
+    // Session start time 
+    long long T_now_n =  as_nsec(&T_now);
+    T_session_start_n = T_now_n + (long long) wait_duration*BILLION;
+    T_session_end_n = T_session_start_n + (long long) session_duration*BILLION;
+    as_timespec(T_session_start_n, &T_session_start);
+    as_timespec(T_session_end_n, &T_session_end); 
+
+    // Create timer to start the sessions
+    makeTimer(&imageStartTimerID, &T_session_start, session_period, 0, &timer_handler);
+    // Create timer to stop the sessions
+    makeTimer(&imageStopTimerID, &T_session_end, session_period, 0, &timer_handler );
+    timer_status |= (TIMER_S | TIMER_E);
+    log_internal_msg("Imaging start and end timer good to go.");
+    return 0;
+}
+
+/**
+ *  log_intenral_msg: logs a given message on a txt file
+ */
+void log_internal_msg(string msg)
+{
+    #ifdef DEBUG
+    std::cout << msg << std::endl;
+    #endif
+    internalLogger->logMsg(msg);
+}
+

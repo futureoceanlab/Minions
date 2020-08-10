@@ -4,9 +4,9 @@
 #include "KellerLD.h"
 
 #define I2C_BUS 1 
-#define LED_EN_PIN 17
-#define LED_FAULT_PIN 18
-#define LED_PIN 4 //23
+#define LED_EN_PIN 22 // 17 
+#define LED_FAULT_PIN 21 //18
+#define LED_PIN 23 //4 //23
 #define TRIG_PIN 5 //24
 
 class Peripheral
@@ -23,6 +23,7 @@ public:
     void setup();
     float getPressure();
     float getTemperature();
+    float getDepth();
     void readData();
 
 private:

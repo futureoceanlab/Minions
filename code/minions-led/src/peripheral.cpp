@@ -42,7 +42,7 @@ void Peripheral::setupPi()
     pinMode(LED_PIN, OUTPUT);
     pinMode(TRIG_PIN, OUTPUT);
     pinMode(LED_EN_PIN, OUTPUT);
-    digitalWrite(LED_EN_PIN, LOW);
+    digitalWrite(LED_EN_PIN, HIGH);
 }
 
 
@@ -87,3 +87,7 @@ float Peripheral::getTemperature()
     return k_sensor->temperature();
 }
 
+float Peripheral::getDepth()
+{
+    return k_sensor->depth();
+} 

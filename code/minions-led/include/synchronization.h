@@ -20,11 +20,8 @@ struct timeinfo
     long long T_skew_n;
     long long T_start_n;
 };
-
 long long as_nsec(struct timespec *T);
 long long bytes_to_nsec(char *buffer);
 void as_timespec(long long t, struct timespec *T);
-int synchronize(struct timeinfo* TI);
-int get_skew(struct timeinfo* TI);
 
 #endif
