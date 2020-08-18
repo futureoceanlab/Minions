@@ -10,7 +10,7 @@ lineStyleOrder = ["-", "--", "-."];
 
 for t=1 %trial
     dir_water = sprintf('data/water/%d.png', t);
-    dir_air0 = sprintf('data/15410110_Edmund56/15410110-%d.png', t);
+    dir_air0 = sprintf('data/air/15410110-%d.png', t);
 
     target_water = (rgb2gray(imread(dir_water)));
     target_air0 = (rgb2gray(imread(dir_air0)));
