@@ -1,12 +1,20 @@
-//////////////////////////////////////////////////////////////////
 /*
-Tcam Software Trigger
-This sample shows, how to trigger the camera by software and use a callback for image handling.
-
-Prerequisits
-It uses the the examples/cpp/common/tcamcamera.cpp and .h files of the *tiscamera* repository as wrapper around the
-GStreamer code and property handling. Adapt the CMakeList.txt accordingly.
+ * Camera-Focus
+ * 
+ * Author: Junsu Jang
+ * Date: Aug 18th, 2020
+ * 
+ * Description:
+ *  This sample shows, how to trigger the camera by software and 
+ *  use a callback for image handling. In every frame, we compute the contrast
+ *  at a given ROI
+ *
+ * Requirement
+ *  It uses the the examples/cpp/common/tcamcamera.cpp and .h files of the 
+ *  *tiscamera* repository as wrapper around the GStreamer code and property 
+ *  handling. Adapt the CMakeList.txt accordingly.
 */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +27,9 @@ GStreamer code and property handling. Adapt the CMakeList.txt accordingly.
 
 using namespace gsttcam;
 
-// Create a custom data structure to be passed to the callback function. 
+/**
+ * Create a custom data structure to be passed to the callback function. 
+ */
 typedef struct
 {
     int ImageCounter;
@@ -28,8 +38,9 @@ typedef struct
    	cv::Mat frame; 
 } CUSTOMDATA;
 
-////////////////////////////////////////////////////////////////////
-// List available properties helper function.
+/**
+ * List available properties helper function.
+ */
 void ListProperties(TcamCamera &cam)
 {
     // Get a list of all supported properties and print it out
@@ -41,8 +52,9 @@ void ListProperties(TcamCamera &cam)
     }
 }
 
-////////////////////////////////////////////////////////////////////
-// Callback called for new images by the internal appsink
+/**
+ * Callback called for new images by the internal appsink
+ */
 GstFlowReturn new_frame_cb(GstAppSink *appsink, gpointer data)
 {
     int width, height ;
@@ -84,17 +96,22 @@ GstFlowReturn new_frame_cb(GstAppSink *appsink, gpointer data)
             memcpy( pCustomData->frame.data, info.data, width*height);
             cv::Mat img(width, height, 1);
             img = pCustomData->frame.clone();
+
+            // Define ROI to compute the contrast
             int x_offset = -0;
             int y_offset = 0;
             int xl = width/2-250+x_offset;
             int yl = height/2-250+y_offset;
+            // Focus on the center 500x500px
             cv::Rect rect(xl, yl, 500, 500);
 
             cv::rectangle(img, rect, cv::Scalar(255), 1);
-            cv::circle(img, cv::Point(width/2+x_offset, height/2+y_offset), 5, cv::Scalar(255), 1);
+            cv::circle(img, cv::Point(width/2+x_offset, height/2+y_offset), 
+                        5, cv::Scalar(255), 1);
 
             cv::Mat img32;
             img(rect).convertTo(img32, CV_32F);
+            // Apply Gaussian then XY sobel filter
             cv::GaussianBlur( img32, img32, cv::Size(3,3), 0, 0, cv::BORDER_DEFAULT );
             cv::Mat dx, dy;
             cv::Sobel( img32, dx, -1, 2, 0, 3 );
@@ -131,7 +148,9 @@ GstFlowReturn new_frame_cb(GstAppSink *appsink, gpointer data)
     return GST_FLOW_OK;
 }
 
-///////////////////////////////////////////////////////////////////////////////////////////////////
+/**
+ * 
+ */ 
 int main(int argc, char **argv)
 {
     gst_init(&argc, &argv);
