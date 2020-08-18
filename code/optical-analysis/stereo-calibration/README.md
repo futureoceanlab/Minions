@@ -7,13 +7,13 @@ stereo imaging system
 
 An example of building the C++ code and running with the given example data
 
-'''
+```
 mkdir build
 cd build
 cmake ..
 make
 ./detectGrids 5 26 26 water-stereo
-'''
+```
 
 The arguments are as follows: number of images, number of points along x-axis,
 number of points along y-axis, and the directory that contains the data.
