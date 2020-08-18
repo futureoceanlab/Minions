@@ -1,4 +1,6 @@
 function globalTracker = indexTraces(tracks, nFrames)
+    % INDEX TRACES Conmpute the start and end of the presence of the
+    % particle based on the age
     globalTracker = zeros(height(tracks), 2);
     for i=1:height(tracks)
         gStartIdx = nFrames - tracks.age(i) + 1;

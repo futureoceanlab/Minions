@@ -1,16 +1,13 @@
 function runPTV(params, nFrames, simImgDir, computedTrackPath, ...
             costOfNonAssignment, detectionMode, boundBuffer, ...
-            minDepth, maxDepth)
-    cameraMatrix1 = cameraMatrix(params.CameraParameters1, eye(3), [0 0 0]);
-    cameraMatrix2 = cameraMatrix(params.CameraParameters2, ...
-        params.RotationOfCamera2, params.TranslationOfCamera2);
-    F = params.FundamentalMatrix;
-    f1 = params.CameraParameters1.FocalLength;
-    p1 = params.CameraParameters1.PrincipalPoint;
-    pxPitch = 0.0022;
-    intrinsics = [f1(1), 0, p1(1);
-              0, f1(2), p1(2);
-              0, 0, 1]; % mm
+            minDepth, maxDepth, visibilityRatio)
+        
+    % RUN PTV   PTV execution software. Run PTV, match
+    %           3D correspondence and update the tracks 
+    %% Parse the camera parameters
+    cameraMatrix1 = squeeze(params.camMatrix(1, :, :));
+    cameraMatrix2 = squeeze(params.camMatrix(2, :, :));
+    intrinsics = params.CameraParameters1.IntrinsicMatrix';
 
     %% vision setting
     % blob Analyzer
@@ -21,62 +18,63 @@ function runPTV(params, nFrames, simImgDir, computedTrackPath, ...
     maxTracks = 400;
     nextTrackIdL= 1;
     nextTrackIdR = 1;
-    %% Main loop
-    for i = 1:nFrames
+
+    %% Main Loop
+    for i = 1:nFrames        
         img1Path = sprintf('%s/cam_1_%d.tif', simImgDir, i);
         img2Path = sprintf('%s/cam_2_%d.tif', simImgDir, i);
-        img1 = rescale(log2(double(imgaussfilt(imread(img1Path, 'tiff'), 3)))); 
-        img2 = rescale(log2(double(imgaussfilt(imread(img2Path, 'tiff'), 3))));
-%         img1 = fgDetector1(img1);
-%         img2 = fgDetector2(img2);
-%         if nFrames < nTrainingFrames
-%             continue;
-%         end
-    %% Detect particles on left and right
-%         imshow(img1);
+        img1 = imread(img1Path, 'tiff');
+        img2 = imread(img2Path, 'tiff');
+        img1 = double(img1); 
+        img2 = double(img2);
+        img1 = imgaussfilt(img1, 2);
+        img2 = imgaussfilt(img2, 2); 
+        img1 = rescale(log2(img1));
+        img2 = rescale(log2(img2));
+        %% 1. Detect partices on left and right
         [particles1, particles2] = detectParticles(img1, img2, detectionMode, boundBuffer);
-    %% Update tracks
-        [tracksL, lostTracksL, nextTrackIdL] = updateTracksPTV(tracksL, particles1, costOfNonAssignment, maxTracks, nextTrackIdL, lostTracksL);
-        [tracksR, lostTracksR, nextTrackIdR] = updateTracksPTV(tracksR, particles2, costOfNonAssignment, maxTracks, nextTrackIdR, lostTracksR);
+    
+        %% 2. Update tracks (Run PTV)
+        [tracksL, lostTracksL, nextTrackIdL] = updateTracksPTV(tracksL, particles1, costOfNonAssignment, maxTracks, nextTrackIdL, lostTracksL, visibilityRatio);
+        [tracksR, lostTracksR, nextTrackIdR] = updateTracksPTV(tracksR, particles2, costOfNonAssignment, maxTracks, nextTrackIdR, lostTracksR, visibilityRatio);
 
-    %% Triangulate particles for assigned and new tracks
-        % reset all coordinate data for the current tracks
-        h = height(tracksL);
-
+        %% 3. Triangulate particles for assigned and new tracks
         % try matching the particles in the current assigned tracks. Unassigned
         % tracks have NaN as 'currentLeftparticleIds'.
         rowsToUpdate = ~isnan(tracksL.currentLeftparticleId);
-        % particle IDs of the detections.
-        trackedParticlesIds = tracksL.currentLeftparticleId(rowsToUpdate);
-        trackFilter = tracksL.id == trackedParticlesIds;
-        trackFilterIdx = find(trackFilter);
-        % each row number corresponds to a particle IDs of the detection.
-%         trackedParticlesData = tracksL(trackFilter, :);
-        
-        if(~isempty(trackFilterIdx))
-            % the rows in trackedParticlesData, trackIds and data match the same
-            % left particle IDs because they have the same sort
-
-
-            for j=1:size(trackFilterIdx, 1)
-                tIdx = trackFilterIdx(j);
+        hasNewAssignment = ~isnan(tracksR.currentLeftparticleId);
+        pR = tracksR.centroid(hasNewAssignment, :);
+        for tIdx=1:height(tracksL)
+            if rowsToUpdate(tIdx)
                 lPts = tracksL.centroid(tIdx, :);
-%                 lPts = trackedParticlesData.centroid(j, :);
+                
+                % project left centroid point onto 3D space coordinate
+                % along the epipolar line. In particular, we look at the 
+                % closest and farthest possible 3D points
                 pt3dLeft = (minDepth.*inv(intrinsics) * [lPts(1); lPts(2); 1])';
                 pt3dRight = (maxDepth.*inv(intrinsics) * [lPts(1); lPts(2); 1])';
+                
+                % project those 3D points to right image coordinate system
                 points = projectPoints([pt3dLeft; pt3dRight], cameraMatrix2')';
-
-                minY = max([0, min([points(1, 2), points(2, 2)])-10]);
-                maxY = min([1944, max([points(1, 2), points(2, 2)])+10]);
-                minX = max([0, min([points(1, 1), points(2, 1)])-10]);
-                maxX = min([2592, max([points(1, 1), points(2, 1)])+10]);
-
-                xyFilter = particles2.centroid(:, 1) > minX & particles2.centroid(:, 1) < maxX ...
-                    & particles2.centroid(:, 2) > minY & particles2.centroid(:, 2) < maxY;
-                rightFilteredXY = particles2.centroid(xyFilter, :);
-                if isempty(rightFilteredXY)
+                
+                % Epipolar search area
+                minY = max([0, min([points(1, 2), points(2, 2)])-5]);
+                maxY = min([1944, max([points(1, 2), points(2, 2)])+5]);
+                minX = max([0, min([points(1, 1), points(2, 1)])-5]);
+                maxX = min([2592, max([points(1, 1), points(2, 1)])+5]);
+                if minY > 1944 || maxY < 0 || minX > 2592 || maxX < 0
                     continue;
                 end
+                % Find particles that fall in this area
+                xyFilter = pR(:, 1) > minX & pR(:, 1) < maxX ...
+                    & pR(:, 2) > minY & pR(:, 2) < maxY;
+                rightFilteredXY = pR(xyFilter, :);
+                if isempty(rightFilteredXY)
+                    % None found, continue
+                    continue;
+                end
+                
+                % We now search for the closest point to the epipolar line
                 v1 = [points(1, :), 0];
                 v2 = [points(2, :), 0];
                 pt = [rightFilteredXY, zeros(size(rightFilteredXY, 1), 1)];
@@ -86,56 +84,15 @@ function runPTV(params, nFrames, simImgDir, computedTrackPath, ...
                 b = pt - v2_;
                 % point to epipolar line distance
                 ptToLineDist = sqrt(sum(cross(a, b, 2).^2, 2))./sqrt(sum(a.^2, 2));
-    %             % size ratio
-    %             areaRatio = particles2.area(xyFilter, :) ./ trackedParticlesData.area(j, :);
-    %             axMjRatio = particles2.ax_mj(xyFilter, :) / trackedParticlesData.ax_mj(j);
-    %             axMnRatio = particles2.ax_mn(xyFilter, :) / trackedParticlesData.ax_mn(j);
-    %             ratios = [areaRatio, axMjRatio, axMnRatio]
-                % gray scale ratio
                 [~, minI] = min(ptToLineDist);
-
-    %             lImg = imread('cam_1_1.tif', 'tiff');
-    %             rImg = imread('cam_2_1.tif', 'tiff');
-    %             imColorL = cat(3, lImg, lImg, lImg);         
-    %             imColorR = cat(3, rImg, rImg, rImg);
-    %             [~, loc] = ismember(rightFilteredXY(minI, :), particles2.centroid, 'rows');
-    %             p = particles2.bbox(loc, :);
-    %             
-    %             figure;
-    %             hold on;
-    % %             subplot(1, 2, 1);
-    %             imshow(img1);
-    %             for q=1:height(tracks)
-    %                 rectangle('Position', tracks.bbox(q, :)', 'FaceColor', 'none', 'EdgeColor', (tracks.colour(q, :)./255)');
-    %             end
-    %             subplot(1, 2, 2);
-    %             imshow(rImg);
-    %             rectangle('Position', p', 'FaceColor', 'none', 'EdgeColor', 'blue');
-    %             rPtsNew(nLeftParticles, :) = [points(1, :) points(2, :)];
-    %             line(rPtsNew(:,[1, 2])',rPtsNew(:,[3, 4])');
-
-    %             xr = particles2
-    %             yr = 
-                [point3d5, r5] = triangulate(lPts, rightFilteredXY(minI, :), params);
-                tracksL.trace{tIdx} = tracksL.trace{tIdx}.updateDetected3D(point3d5);
-    %             close all;
-    %             tracks.rightCoord2D(rowsToUpdate, :) = particles2(, :); % px
-    %             tracks.worldCoordinates(rowsToUpdate, :) = point3d5;
+                % Trianglate the 3D point and update the tracks
+                [point3d, ~] = triangulate(lPts, rightFilteredXY(minI, :), cameraMatrix1, cameraMatrix2);
+                tracksL.trace{tIdx} = tracksL.trace{tIdx}.updateDetected3D(point3d);
+                if tracksL.has3D(tIdx) == false
+                    % Mark particles whose 3D counterpart was found
+                    tracksL.has3D(tIdx) = true;
+                end
             end
-%             trackIdx = 6;
-%             showTrack = false;
-%             if ((showTrack == true) && (height(tracksL) >= trackIdx))
-%                 figure;
-%                 hold on;
-%         %             subplot(1, 2, 1);
-%                 imshow(img1);
-%                 tTemp = tracksL; %(assignments(:, 1), :);
-%         %         for q=1:height(tTemp)
-%                     rectangle('Position', tTemp.bbox(trackIdx, :)', 'FaceColor', 'none', 'EdgeColor', (tracks.colour(5, :)./255)');
-%         %         end
-% 
-%                 close all
-%             end
         end
         % Update age of all the tracks
         if ~isempty(tracksL)
@@ -151,46 +108,11 @@ function runPTV(params, nFrames, simImgDir, computedTrackPath, ...
             lostTracksR.age = lostTracksR.age + 1;
         end
     end
-    tracksL = mergeLostTracks(tracksL, lostTracksL);
-    tracksR = mergeLostTracks(tracksR, lostTracksR);
-    tracks = struct('tracksL', tracksL, 'tracksR', tracksR);
+    % all frames have been analyzed. Merge the lost tracks with the current
+    % tracks
+    [tracksL, fL]= mergeLostTracks(tracksL, lostTracksL, visibilityRatio);
+    [tracksR, fR] = mergeLostTracks(tracksR, lostTracksR, visibilityRatio);
+    tracks = struct('tracksL', tracksL, 'tracksR', tracksR, 'fL', fL, 'tR', fR);
 
     save(computedTrackPath, 'tracks');
-    % save('lostTracks.mat', 'lostTracks');
-    % writetable(tracks, 'tracks.dat');
-    % figure; 
-    % hold on;
-    % imshow(imColor);
-    % 
-    % for i=1:height(tracks)
-    % %     imColor(floor(tracks.centroid(i, 2)), floor(tracks.centroid(i, 2)), :) = [0, 0, 255];
-    %     rectangle('Position', tracks.bbox(i, :)', 'FaceColor', 'none', 'EdgeColor', 'blue');
-    % end
-    % 
-    % hold off;
-%     function trackImg = drawTrace(img, tracks)
-%         text_str = cell(height(tracks),1);
-%         pos = zeros(height(tracks), 2);
-% 
-%         figure;
-%         hold on;
-%         % tracks(tracks.totalVisibleCount ~= 2, :) = [];
-%         for i=1:height(tracks)
-%             text_str{i} = ['T: ' num2str(tracks.id(i), '%d')];
-%             trace = tracks.trace{i}.detectedTrace;
-%             pos(i, :) = trace(1, :);
-%         end
-%         trackImg = insertText(img, pos-25, text_str, 'FontSize', 18, ...
-%             'BoxColor', tracks.colour, 'BoxOpacity', 0.4, ...
-%             'TextColor', 'white');
-%         imshow(trackImg, [0 255]);
-%         for i=1:height(tracks)
-%             trace = tracks.trace{i}.detectedTrace; 
-%             line(trace(:, 1), trace(:, 2), ...
-%                 'Color', tracks.colour(i, :)./255, ...
-%                 'LineWidth', 1);
-%         end
-%     end
-
-
 end

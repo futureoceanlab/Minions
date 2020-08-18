@@ -1,6 +1,7 @@
 function cloudPts = generateCylinder(radius, height, nPoints)
-% Generate a cylinder with custom radius and height centered around (0, 0,
-% 0)
+    % GENERATE CYLINDERS
+    % Generate a cylinder with custom radius and height 
+    % centered around (0, 0, 0)
     capArea = pi*radius^2;
     bodyArea = 2*pi*radius*height;
     saRatio = (capArea)/(2*capArea + bodyArea);
@@ -14,6 +15,7 @@ function cloudPts = generateCylinder(radius, height, nPoints)
     zc= height.*A(2, 1:end);
     
     % random radius for top/bottom surface
+    % Distribute according to the radial distance
     B=rand(1, nCapPoints);
     capAngle = (2*pi).*B;
     r = sqrt(rand([1, nCapPoints])).* radius;
@@ -25,7 +27,4 @@ function cloudPts = generateCylinder(radius, height, nPoints)
     yc = [yc yc2 yc2]';
     zc = [zc zcTop zcBottom]' - height/2;
     cloudPts = [xc yc zc];
-    
-%     plot3(cloudPts(:, 1), cloudPts(:, 2), cloudPts(:, 3), '.');
-%     cylinderPts = bsxfun(@plus, cylinderPts, [cx cy cz]);
 end

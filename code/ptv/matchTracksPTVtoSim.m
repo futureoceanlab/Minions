@@ -1,29 +1,8 @@
 function [traceMatch, matchIdx] = matchTracksPTVtoSim(tracks, tracksSim, nFrames)
-
-%         figTrace = drawTraceFigure(tracks, img, 'computed');
-%         curTracePath = sprintf("%s/trace_%d_%s_border_%d_%d.fig", ...
-%             curTrackEvalDir, costOfNonAssignment, detectionMode, ...
-%             boundBuffer, camIdx);
-%         curTraceImgPath = sprintf("%s/trace_%d_%s_border_%d.png", ...
-%             curTrackEvalDir, costOfNonAssignment, detectionMode, ...
-%             boundBuffer);
-% %         saveas(figTrace, curTraceImgPawth, 'png');
-%         savefig(curTracePath);
-% 
-%         figTraceSim = drawTraceFigure(tracksSim, img, 'simulated');
-%         curSimTracePath = sprintf("%s/trace_%d_%s_sim_%d.fig", ...
-%             curTrackEvalDir, costOfNonAssignment, detectionMode, ...
-%             camIdx);
-%         curSimTraceImgPath = sprintf("%s/trace_%d_%s_sim.png", ...
-%             curTrackEvalDir, costOfNonAssignment, detectionMode);
-%         savefig(curSimTracePath);
-% %         saveas(figTraceSim, curSimTraceImgPath, 'png');
-% 
-%         close all;
-        % [globalStartIdx globalEndIdx]
-        
-        % Match between tracked particles with simulated particles
-        % First, convert age to global time (index)
+    % MATCH TRACKS PTV TO SIM find the simulation particle corresponding
+    % to the particle using the PTV
+    
+    % First, convert age to global time (index)
     globalTrackerT = indexTraces(tracks, nFrames);
     globalTrackerS = indexTraces(tracksSim, nFrames);
     traceDiff = zeros(height(tracks), 2);
@@ -49,6 +28,8 @@ function [traceMatch, matchIdx] = matchTracksPTVtoSim(tracks, tracksSim, nFrames
             traceDiff(j, :) = mean(abs(dt - st(sStartIdx(j):sStartIdx(j)+endIdx(j)-1, :)));
         end
         d = vecnorm(traceDiff, 2, 2);
+        % Find the simulation particle whose trace is the closest 
+        % to that of current particle
         [minD, minIdx] = min(d);
         % Remove matches that are too far
         if (minD > 50)
@@ -59,6 +40,7 @@ function [traceMatch, matchIdx] = matchTracksPTVtoSim(tracks, tracksSim, nFrames
             dt = tracks.trace{minIdx}.detectedTrace2D;
 %             display("stop");
         end
+        
         matchIdx(i, :) = [  tStartIdx(minIdx), ...
                             tStartIdx(minIdx) + endIdx(minIdx) - 1,...
                             sStartIdx(minIdx),...
@@ -66,14 +48,4 @@ function [traceMatch, matchIdx] = matchTracksPTVtoSim(tracks, tracksSim, nFrames
                             maxStartIdx(minIdx)];
         traceMatch(i) = minIdx;
     end
-    % Remove matched tracks to visualize the missing ones
-%         tracksSim(~(traceMatch == 0), :) = [];
-%         traceMatch(traceMatch == 0) = [];
-%         tracks(traceMatch, :) = [];
-%         if ~isempty(tracks)
-%             figMissingTrace = drawTraceFigure(tracks, img, 'missed computed');
-%         end
-%         if ~isempty(tracksSim)
-%             figMissingSim = drawTraceFigure(tracksSim, img, 'missed simulation');
-%         end
 end

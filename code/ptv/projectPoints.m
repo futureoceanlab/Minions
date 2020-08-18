@@ -1,4 +1,5 @@
 function points2d = projectPoints(points3d, P)
+    % PROJECT POINTs project 3D point onto 2D based on projection matrix
     % points3D = points in 3D space
     % P = projection matrix
     points3dHomog = [points3d, ones(size(points3d, 1), 1, 'like', points3d)]';
