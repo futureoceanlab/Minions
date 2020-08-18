@@ -1,3 +1,6 @@
+% LENS COMPARISON
+% Compare the performance of different lenses (edmund, cnaico and scorpion)
+% and display in a graph
 e = "data/comparison/edmund_2580.png";
 c = "data/comparison/cnaico_2580.png";
 svl = "data/comparison/svl_2580.png";
