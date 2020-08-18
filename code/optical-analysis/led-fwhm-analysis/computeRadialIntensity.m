@@ -1,8 +1,10 @@
 function avgIntensity = computeRadialIntensity(scanRange, centroid, img)
+    % COMPUTE RADIAL INTENSITY
+    % measure the intensity of the image across the radial distance
+    % and take average
     w = -scanRange:scanRange;
     intensitySum = zeros(scanRange, 1, 'int32');
     count = zeros(scanRange, 1, 'int32');
-%     img1 = img;
     for i = 1:length(w)
         x = centroid(1)+w(i);
         for j = 1:length(w)
@@ -13,7 +15,6 @@ function avgIntensity = computeRadialIntensity(scanRange, centroid, img)
             end
             r = (round(sqrt(w(i)^2+w(j)^2)))+1;
             if r <= scanRange
-%                 img1(y, x) = 255;
                 intensitySum(r) = intensitySum(r) + int32(img(y, x));
                 count(r) = count(r) + 1;
             end
