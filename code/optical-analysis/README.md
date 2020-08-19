@@ -26,3 +26,10 @@ Upon determining the single camera optics (i.e., imaging sensor and the lens),
 we need to set up a stereo pair. We have designed the ideal mechanical setup
 for the stereo pair, but in the real life, there are errors. Therefore, we need
 to calibrate. The tools in here are meant to help with the calibration process.
+
+### Blur
+Since the focal length is very long and we are insterested in micrometer scale
+targets, the depth of field is very narrow. Therefore, the particles become
+very blurry if not in the focal plane. We are interested in comparing the 
+simulation and the emprical measurement of the impact of the distance on the
+blur size of circular disc.
