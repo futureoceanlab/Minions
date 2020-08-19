@@ -1,24 +1,32 @@
 function [vol, maxVol] = computeOverlapVol(B, thetas, focalLen, dof, wantMaxVol)
+    % COMPUTE OVERLAP VOL
+    % compute the overlapping imaging volume between two cameras given
+    % the baseline, pan angle, focal length and depth of field
+    
     maxVol = 0;
+    % principal points
     p1 = [1944 2592]./2;
+    % ignore alphashape warning
     warning('off', 'MATLAB:alphaShape:DupPointsBasicWarnId');
+    % Translational and rotational matrix of the left camera
     R1=  eye(3);
     T1 = [0 0 0];
 
-%     B = 160;
-%     deltas = deg2rad(-29:-0.2:-34);
     vol = zeros(size(thetas));
-%     focalLen = 33.52;
     pxPitch = 0.0022;
     desiredResolution = 0.02;
 
     for tIdx=1:size(thetas, 1)
         theta = thetas(tIdx);
-        R2 = [cos(theta) 0 sin(theta); 0 1 0; -sin(theta) 0 cos(theta)]; %[1 0 0; 0 cos(delta) -sin(delta); 0 sin(delta) cos(delta)]; % params.RotationOfCamera2;
+        % translational and rotational matrix for the right camera
+        R2 = [cos(theta) 0 sin(theta); 0 1 0; -sin(theta) 0 cos(theta)];
         T2 = -[B*cos(theta/2), 0, B*sin(theta/2)] ;
-
-        [shpL, pts3DL] = computeShpPts(dof, R1, T1, focalLen, p1, pxPitch, desiredResolution);
-        [shpR, pts3DR] = computeShpPts(dof, R2, T2, focalLen, p1, pxPitch, desiredResolution);
+        % point clouds on the surface of the imaging volume of each camera
+        [shpL, pts3DL] = computeShpPts(dof, R1, T1, focalLen, p1,...
+            pxPitch, desiredResolution);
+        [shpR, pts3DR] = computeShpPts(dof, R2, T2, focalLen, p1,...
+            pxPitch, desiredResolution);
+        % Find the overlapping volume 
         x1 = pts3DL(:, 1);
         y1 = pts3DL(:, 2);
         z1 = pts3DL(:, 3);
@@ -32,6 +40,8 @@ function [vol, maxVol] = computeOverlapVol(B, thetas, focalLen, dof, wantMaxVol)
     end
     if (wantMaxVol)
         % TODO
+        % Sweep through the overlapping volumes and identify the setup
+        % that outputs the maximum volume
         return;
     end
 end
