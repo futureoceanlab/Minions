@@ -13,10 +13,13 @@ Minion stereo camera components. EAGLE software is required.
 ## Code
 The software components of the project can be broken down into four major
 parts:
-- **PTV**
-- **Firmware**
-- **Optical Simulation**
-- **Optical Analysis**
+- **PTV**: We devised a simulation of the settling marine snow. We also 
+apply PTV to track those particles and evaluated the performance of the PTV. 
+- **Firmware**: Firmware to control cameras and LED during deployment.
+- **Optical Simulation**: Simulation tools to evaluate the designs of the stereo
+optical system.
+- **Optical Analysis**: Analysis of empirical measurements of the imaging 
+system and the lighting systems.
 
 More detailed explanations of the code can be found in each of the sub-directories
 and in the code itself.
