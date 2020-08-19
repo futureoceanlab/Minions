@@ -4,4 +4,4 @@ vscode/
 .DS_Store
 ptv/data
 code/optical-simulation/light/*.tif
-code/optical-simulation/esd_blur_profile/esd_sim2
+code/optical-simulation/esd_detectability/esd_sim2
