@@ -1,7 +1,12 @@
 function angRadiance = radiantPower()
+% RADIANT POWER
+% computation of the radiant intensity profile of the combination
+% of the LED and the reflector based on the datasheet provided
+
 efficiency = 0.8;
 sigma = 5;
 
+% Values needed to be interpolated for finer computation
 %%orange
 % cenW =  615;
 % lumFlux = 107; % lm

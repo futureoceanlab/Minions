@@ -239,19 +239,19 @@ for rIdx=1:size(sRadius, 2)
 
             % Find out the offset of the detected particles and the actual
             % particle centroid
-            img = img / Vss;
-            img(img > 1) = 1;
-            img = img * 255;
-            img(img > 255) = 255;
-            img(img < 1) = 1;
-            img = rescale(log2(img));
-
-
-            particlesLights = detectParticles(img, 0);
-            particlesAmbient = detectParticles(img2, 0);
-
-            cDiff(rIdx, dIdx, aIdx, :) = mean(abs(particlesLights.centroid - particlesAmbient.centroid));
-            cDiffStd(rIdx, dIdx, aIdx, :) = std(abs(particlesLights.centroid - particlesAmbient.centroid));
+%             img = img / Vss;
+%             img(img > 1) = 1;
+%             img = img * 255;
+%             img(img > 255) = 255;
+%             img(img < 1) = 1;
+%             img = rescale(log2(img));
+% 
+% 
+%             particlesLights = detectParticles(img, 0);
+%             particlesAmbient = detectParticles(img2, 0);
+% 
+%             cDiff(rIdx, dIdx, aIdx, :) = mean(abs(particlesLights.centroid - particlesAmbient.centroid));
+%             cDiffStd(rIdx, dIdx, aIdx, :) = std(abs(particlesLights.centroid - particlesAmbient.centroid));
         end
     end
 end
@@ -267,9 +267,7 @@ ylabel('normalized total intensity (a.u.)');
 
 figure; hold on; plot(rad2deg(phi), cDiff(:, 1)); plot(rad2deg(phi), cDiff(:, 2)); plot(rad2deg(phi), mean(cDiff, 2));
 
-% Commands for the graph to output the ffect of light angle/distance on the
-% offset error and the voltage
-
+% Commands for the
 % figure; hold on; plot(rad2deg(phi), squeeze(mean(squeeze(cDiffStd(:, :, :, 2)), 2))); xlabel("Light Angle (deg)"); ylabel("y-axis Detection Offset Error (px)"); legend(["ESD=100um", "ESD=200um", "ESD=500um", "ESD=1000um"]); ylim([0 0.6]);
 % figure; hold on; plot(rad2deg(phi), squeeze(mean(squeeze(cDiffStd(:, :, :, 2)), 2))); xlabel("Light Angle (deg)"); ylabel("y-axis Detection Offset Error (px)"); legend(["ESD=100um", "ESD=200um", "ESD=500um", "ESD=1000um"]); ylim([0 0.6]);
 % figure; hold on; plot(rad2deg(phi), squeeze(mean(squeeze(cDiffStd(:, :, :, 1)), 2))); xlabel("Light Angle (deg)"); ylabel("x-axis Detection Offset Error (px)"); legend(["ESD=100um", "ESD=200um", "ESD=500um", "ESD=1000um"]); ylim([0 0.6]);
