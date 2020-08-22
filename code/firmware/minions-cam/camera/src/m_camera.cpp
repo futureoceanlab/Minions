@@ -91,7 +91,8 @@ std::string t_rtc;
 timer_t cameraTimerID, syncTimerID, driftTimerID, stopTimerID;
 struct timespec now;
 long long T_skew_prev, T_skew_now;
-
+// PID of the imaging firmware for signal
+pid_t imaging_pid = 0;
 uint8_t session_status = SES_STOPPED;
 uint8_t timer_status = 0;
 
@@ -129,6 +130,7 @@ static void timer_handler(int sig, siginfo_t *si, void *uc)
             if (timer_status & TIMER_S)
                 timer_delete(syncTimerID);
             timer_status = 0;
+            kill(imaging_pid, SIGSTOP);
         }
     }
 }
@@ -162,6 +164,13 @@ int main(int argc, char* argv[])
     // TODO: (1) Get configuration parmaeter from argv
     // TODO: (2) Get RTC time +i configuration from the led?
     // TODO: Log the drift + skew time;
+    for (int i = 0; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-i") == 0)
+        {
+            imaging_pid = (pid_t) atoi(argv[i+1]);
+        }
+    }
     int drift_period = 15, sync_period = 300;
     runCamera(drift_period, sync_period);
 }
@@ -212,9 +221,14 @@ void runCamera(int drift_period, int sync_period)
                         timer_delete(syncTimerID);
                     timer_status = 0;
                     count = 0;
+                    // Tell the imaging firmware to stop
+                    kill(imaging_pid, SIGSTOP);
+
                 }
                 if (sync_status == TERMINATE)
                 {
+                    // Tell the imaging firmware to terminate
+                    kill(imaging_pid, SIGTERM);
                     logInternalMsg("Sync: terminate");
                     break;
                 }
@@ -265,6 +279,7 @@ void runCamera(int drift_period, int sync_period)
                 T_sync_n = T_trig_n;
                 as_timespec(TI.T_stop_n, &T_stop);
                 // Run simple_snapimage
+                kill(imaging_pid, SIGCONT);
                 // Trigger
                 status = makeTimer(&cameraTimerID, &T_trig, PERIOD, 0, &timer_handler);
                 // Drift
@@ -342,7 +357,7 @@ void runCamera(int drift_period, int sync_period)
     // Done Data Acquisition
     // Programmed data acquisition duration elapsed
     //  - Regularly measure depth and temperature until powered off.
-    return 0;
+    return;
 }
 
 

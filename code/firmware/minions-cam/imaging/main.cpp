@@ -184,6 +184,18 @@ int run_camera(string sn, int exposure, int gain)
     {
         if (camRunning == 0)
         {
+            // End of a session, stop the camera
+            cam.stop();
+        }
+        else if (camRunning == 2)
+        {
+            // Start of a session, resume to the camera
+            cam.start();
+            camRunning = 1;
+        }
+        else if (camRunning == 3)
+        {
+            // Terminate / Interrupt on the session
             cam.stop();
             return 0;
         }
@@ -397,6 +409,16 @@ void setCameraProperty(TcamCamera &cam, string property, int value)
 void signalHandler( int signum ) {
     // cleanup and close up stuff here  
     // terminate program  
-    if (signum == SIGINT)
+    if (signum == SIGSTOP)
+    {
         camRunning = 0;
+    }
+    else if (signum == SIGCONT)
+    {
+        camRunning = 2;
+    }
+    else if (signum == SIGINT || signum == SIGTERM)
+    {
+        camRunning = 3;
+    }
 }
