@@ -15,10 +15,15 @@
 #define PORT 8080 
 #define SERVER_IP "192.168.4.1"
 
+#define TERMINATE 1
+#define STOP_IMAGING 2 
+
+
 struct timeinfo
 {
     long long T_skew_n;
     long long T_start_n;
+    long long T_stop_n;
 };
 
 long long as_nsec(struct timespec *T);

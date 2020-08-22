@@ -22,7 +22,7 @@ void as_timespec(long long t, struct timespec *T)
     return;
 }
 
-long long get_TPSN_data(int sock)
+int get_TPSN_data(int sock, struct timespec *T_skew)
 {
     int valread;
     char buffer[16] = {0}; 
@@ -48,6 +48,22 @@ long long get_TPSN_data(int sock)
         // Receive T2 and T3
         T2n = bytes_to_nsec(buffer);
         T3n = bytes_to_nsec(buffer+8);
+        if (T2n == TERMINATE)
+        {
+            return TERMINATE;
+        }
+        else if (T2n == 0)
+        { 
+            if (T3n != 0)
+            {
+                // We have not begun operation yet
+                as_timespec(T3n, T_skew);
+            }
+            // Delay for T3 time
+            return STOP_IMAGING;
+            
+        }
+        
         //time_t T3_sec_i = (buffer[11] << 24) | (buffer[10] << 16) | (buffer[9] << 8) | buffer[8];  
         //int T3_nsec_i = (buffer[15] << 24) | (buffer[14] << 16) | (buffer[13] << 8) | buffer[12];
         //struct timespec T2 = {.tv_sec = T2_sec_i, .tv_nsec=T2_nsec_i};
@@ -61,7 +77,8 @@ long long get_TPSN_data(int sock)
     }
     // compute average time skew
     T_skew_n /= (NUM_AVG * 2);
-    return T_skew_n;
+    as_timespec(T_skew_n, T_skew);
+    return 0;
 }
 
 int synchronize(struct timeinfo *TI, uint8_t isFirst)
@@ -73,6 +90,11 @@ int synchronize(struct timeinfo *TI, uint8_t isFirst)
         printf("\n Socket creation error \n"); 
         return -1; 
     } 
+
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
    
     serv_addr.sin_family = AF_INET; 
     serv_addr.sin_port = htons(PORT); 
@@ -81,6 +103,7 @@ int synchronize(struct timeinfo *TI, uint8_t isFirst)
     if(inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr)<=0)  
     { 
         printf("\nInvalid address/ Address not supported \n"); 
+    close(sock);
         return -1; 
     } 
    
@@ -88,6 +111,7 @@ int synchronize(struct timeinfo *TI, uint8_t isFirst)
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) 
     { 
         printf("\nConnection Failed \n"); 
+    close(sock);
         return -1; 
     } 
 
@@ -98,39 +122,51 @@ int synchronize(struct timeinfo *TI, uint8_t isFirst)
     char buffer[16] = {0}; 
 
     struct timespec T_start;
-    struct timespec T_skew;
-    long long T_skew_n = get_TPSN_data(sock);
-    as_timespec(T_skew_n, &T_skew);
-    printf("%lld skew: %d.%d\n", T_skew_n, T_skew.tv_sec, T_skew.tv_nsec);
+    struct timespec T_skew = {.tv_sec=0, .tv_nsec=0};
+    int tpsn_status = get_TPSN_data(sock, &T_skew);
+    long long T_skew_n = as_nsec(&T_skew);
+    if (tpsn_status == -1 || tpsn_status == TERMINATE || tpsn_status == STOP_IMAGING)
+    {
+        TI->T_skew_n = T_skew_n;
+    close(sock);
+        return tpsn_status;
+    }
+    //as_timespec(T_skew_n, &T_skew);
+   // printf("%lld skew: %d.%d\n", T_skew_n, T_skew.tv_sec, T_skew.tv_nsec);
 
     // Ping the server to about start time
     int start = 0, valread;
-    long long temp_n=0, T_start_n = 0;
+    long long temp_n=0, T_start_n = 0, T_stop_n=0;
     while (!start)
     {
         usleep(10);
         send(sock, status_buf, 8, 0);
         valread = read(sock, buffer, 16);
-        if (valread == 0 && status_buf[4] == 1)
+        /*if (valread == 0 && status_buf[4] == 1)
         {
             // the server has moved onto timer, so we will break
             break;
-        }
+        }*/
         temp_n = bytes_to_nsec(buffer);
         //printf("%lld\n", temp_n);
         if (temp_n > 1)
         {
             T_start_n = temp_n;
-            if (isFirst) status_buf[4] = 1;
+            T_stop_n = bytes_to_nsec(buffer+8);
+            break;
+            //if (isFirst) status_buf[4] = 1;
         }
-        start = (temp_n == 1) || !isFirst;
+        //start = (temp_n == 1) || !isFirst;
     }
     close(sock);
     
 //    printf("start: %lld\n", T_start_n);
     T_start_n -= T_skew_n;
+    T_stop_n -= T_skew_n;
     TI->T_skew_n = T_skew_n;
     TI->T_start_n = T_start_n + 1000000;
+    TI->T_stop_n = T_stop_n;
+    return 0;
     //struct timespec T_delay = {.tv_sec = 5, .tv_nsec = 0};
     //long long T_delay_n = as_nsec(&T_delay);
     //long long T_start_n = T3n - T_skew_n + T_delay_n;
@@ -149,6 +185,10 @@ int get_skew(struct timeinfo* TI)
         return -1; 
     } 
    
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     serv_addr.sin_family = AF_INET; 
     serv_addr.sin_port = htons(PORT); 
        
@@ -156,12 +196,14 @@ int get_skew(struct timeinfo* TI)
     if(inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr)<=0)  
     { 
         printf("\nInvalid address/ Address not supported \n"); 
+    close(sock);
         return -1; 
     } 
 
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) 
     { 
         printf("\nConnection Failed \n"); 
+    close(sock);
         return -1; 
     }
     
@@ -169,10 +211,14 @@ int get_skew(struct timeinfo* TI)
     // Compute the skew upon averaging using TPSN
     struct timespec T_start;
     struct timespec T_skew;
-    long long T_skew_n = get_TPSN_data(sock);
-    //as_timespec(T_skew_n, &T_skew);
-    TI->T_skew_n = T_skew_n;
+    int tpsn_status = get_TPSN_data(sock, &T_skew);
+    TI->T_skew_n = as_nsec(&T_skew);
+    if (tpsn_status == -1 || tpsn_status == TERMINATE || tpsn_status == STOP_IMAGING)
+    {
     close(sock);
+        return tpsn_status;
+    }
+    //as_timespec(T_skew_n, &T_skew);
     // // Ping the server to about next trigger time
     // // send 2
     // char status_buf[8] = {0};

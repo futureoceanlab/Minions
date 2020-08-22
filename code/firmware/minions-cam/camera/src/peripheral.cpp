@@ -87,3 +87,7 @@ float Peripheral::getTemperature()
     return k_sensor->temperature();
 }
 
+float Peripheral::getDepth()
+{
+    return k_sensor->depth();
+} 
