@@ -53,13 +53,12 @@
 #include <atomic>
 #include <sstream>
 
-
 #include "synchronization.h"
 #include "peripheral.h"
 #include "logger.h"
 #include "utility.h"
 
-
+// Uncomment to operate in DEBUG mode
 #define DEBUG
 
 #define PERIOD 1 
@@ -67,111 +66,90 @@
 #define TEN_MIN 600
 #define OFFSET 2 
 
-#define ARB_WAIT 5                                  // Seconds
+// Global status for session
 #define SES_NEW 0
 #define SES_RUNNING 1
 #define SES_STOPPED 2
 
-#define TIMER_S 0b1
-#define TIMER_T 0b10
-#define TIMER_D 0b100
-#define TIMER_E 0b1000
+// Flags for each timer status
+// When a bit is 1, its corresponding timer is currently running
+#define TIMER_S 0b1         // Sync
+#define TIMER_T 0b10        // Camera Trigger
+#define TIMER_D 0b100       // Drift
+#define TIMER_E 0b1000      // Stop
 
+/* Function declaration */
+static void timer_handler(int sig, siginfo_t *si, void *uc);
+void triggerCamera();
+void setup();
+void runCamera(int drift_period, int sync_period);
+void logInternalMsg(std::string msg);
+
+/* Global Variables */
+
+// PID of the imaging firmware for signal
+pid_t imaging_pid = 0;
+
+// Class instances for operation
 Peripheral *peripheral = new Peripheral(1);
 Logger *internalLogger = new Logger();
 
-void logInternalMsg(std::string msg);
-
-
-int count = 0;
+// Number of times that the unit has fallen a sleep (exponentially) to
+// wait for the next instruction from the server
 uint8_t wait_count = 0;
+
+// atomic boolean flag for status of the unit
 std::atomic_bool fSync(false);
 std::atomic_bool fDrift(false);
+
+// RTC time in string (UTC format)
 std::string t_rtc;
-timer_t cameraTimerID, syncTimerID, driftTimerID, stopTimerID;
+
+// Various timers used to timer interrupts
+timer_t triggerTimerID, syncTimerID, driftTimerID, stopTimerID;
+
+// variable to timstamp current time
 struct timespec now;
+// time (nanoseconds) for monitoring the previous and current amount of
+// skew compared to the server
 long long T_skew_prev, T_skew_now;
-// PID of the imaging firmware for signal
-pid_t imaging_pid = 0;
+
+// status variables
 uint8_t session_status = SES_STOPPED;
+// bit-wise flag variable for timer status
 uint8_t timer_status = 0;
 
-void triggerCamera();
 
-static void timer_handler(int sig, siginfo_t *si, void *uc)
-{
-    timer_t *tidp;
-    tidp = (timer_t *) si->si_value.sival_ptr;
-    if ( *tidp == cameraTimerID )
-    {
-        triggerCamera();
-    }
-    else if ( *tidp == syncTimerID)
-    {
-        fSync = true;
-    }
-    else if ( *tidp == driftTimerID )
-    {
-        fDrift = true;
-    }
-    else if (*tidp == stopTimerID)
-    {
-        fSync = true;
-        if (session_status == SES_RUNNING)
-        {
-            session_status = SES_STOPPED;
-            // Turn off Simple Snapimage
-            if (timer_status & TIMER_T)
-                timer_delete(cameraTimerID);
-            if (timer_status & TIMER_D)
-                timer_delete(driftTimerID); 
-            if (timer_status & TIMER_E)
-                timer_delete(stopTimerID);
-            if (timer_status & TIMER_S)
-                timer_delete(syncTimerID);
-            timer_status = 0;
-            kill(imaging_pid, SIGSTOP);
-        }
-    }
-}
-
-void triggerCamera()
-{
-    // trigger camera
-    peripheral->triggerOn();
-    usleep(10);
-	peripheral->triggerOff();
-	count++;
-}
-
-
-void setup()
-{
-    // CSV setup
-    std::string logName="changeme.csv";
-    internalLogger->open(logName);
-
-    if (peripheral->init() == -1)
-    {
-        logInternalMsg("Error connecting to peripherals");
-        return;
-    }
-}
-
-
+/**
+ * main: entrance to the firmware. Parse input arguments.
+ */
 int main(int argc, char* argv[])
 {
     // TODO: (1) Get configuration parmaeter from argv
-    // TODO: (2) Get RTC time +i configuration from the led?
     // TODO: Log the drift + skew time;
+    int drift_period = 15, sync_period = 300;
     for (int i = 0; i < argc; i++)
     {
         if (strcmp(argv[i], "-i") == 0)
         {
             imaging_pid = (pid_t) atoi(argv[i+1]);
         }
+        else if (strcmp(argv[i], "-d") == 0)
+        {
+            drift_period = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-s") == 0)
+        {
+            sync_period = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-h") == 0)
+        {
+            std::cout << "\t-i\tPID of the imaging firmware\n\
+        -d\tTime after synchronization until drift computation (s)\n\
+        -s\tSync period (s)\n" << std::endl;
+            return 0;
+        }
     }
-    int drift_period = 15, sync_period = 300;
     runCamera(drift_period, sync_period);
 }
 
@@ -212,7 +190,7 @@ void runCamera(int drift_period, int sync_period)
                 {
                     session_status = SES_STOPPED;
                     if (timer_status & TIMER_T)
-                        timer_delete(cameraTimerID);
+                        timer_delete(triggerTimerID);
                     if (timer_status & TIMER_D)
                         timer_delete(driftTimerID); 
                     if (timer_status & TIMER_E)
@@ -220,7 +198,6 @@ void runCamera(int drift_period, int sync_period)
                     if (timer_status & TIMER_S)
                         timer_delete(syncTimerID);
                     timer_status = 0;
-                    count = 0;
                     // Tell the imaging firmware to stop
                     kill(imaging_pid, SIGSTOP);
 
@@ -281,16 +258,15 @@ void runCamera(int drift_period, int sync_period)
                 // Run simple_snapimage
                 kill(imaging_pid, SIGCONT);
                 // Trigger
-                status = makeTimer(&cameraTimerID, &T_trig, PERIOD, 0, &timer_handler);
+                status = makeTimer(&triggerTimerID, &T_trig, PERIOD, 0, &timer_handler);
                 // Drift
                 status = makeTimer(&driftTimerID, &T_drift, 0, 0, &timer_handler); //MIN, server_sec/4);
                 status = makeTimer(&stopTimerID, &T_stop, 0, 0, &timer_handler);
                 timer_status |= (TIMER_T | TIMER_D | TIMER_E);
-                count = 0;
             }
             else
             {
-                resetTimer(&cameraTimerID, &T_trig, server_sec*PERIOD);
+                resetTimer(&triggerTimerID, &T_trig, server_sec*PERIOD);
                 resetTimer(&driftTimerID, &T_drift, 0);
             }
             fSync = 0;
@@ -331,7 +307,7 @@ void runCamera(int drift_period, int sync_period)
             server_sec = (long long) (double(BILLION) * (double(BILLION)/server_period));
             T_trig_n += (drift_period+1) * server_sec;
             as_timespec(T_trig_n, &T_trig);
-            resetTimer(&cameraTimerID, &T_trig, server_sec*PERIOD);
+            resetTimer(&triggerTimerID, &T_trig, server_sec*PERIOD);
 
             // reset synchronization time with new server second
             T_sync_n = T_sync_n + sync_period * server_sec + server_sec/OFFSET;
@@ -361,6 +337,45 @@ void runCamera(int drift_period, int sync_period)
 }
 
 
+static void timer_handler(int sig, siginfo_t *si, void *uc)
+{
+    timer_t *tidp;
+    tidp = (timer_t *) si->si_value.sival_ptr;
+    if ( *tidp == triggerTimerID )
+    {
+        triggerCamera();
+    }
+    else if ( *tidp == syncTimerID)
+    {
+        fSync = true;
+    }
+    else if ( *tidp == driftTimerID )
+    {
+        fDrift = true;
+    }
+    else if (*tidp == stopTimerID)
+    {
+        fSync = true;
+        if (session_status == SES_RUNNING)
+        {
+            session_status = SES_STOPPED;
+            // Turn off Simple Snapimage
+            if (timer_status & TIMER_T)
+                timer_delete(triggerTimerID);
+            if (timer_status & TIMER_D)
+                timer_delete(driftTimerID); 
+            if (timer_status & TIMER_E)
+                timer_delete(stopTimerID);
+            if (timer_status & TIMER_S)
+                timer_delete(syncTimerID);
+            timer_status = 0;
+            kill(imaging_pid, SIGSTOP);
+        }
+    }
+}
+
+
+
 void logInternalMsg(std::string msg)
 {
     #ifdef DEBUG
@@ -370,3 +385,26 @@ void logInternalMsg(std::string msg)
 }
 
 
+
+void triggerCamera()
+{
+    // trigger camera
+    peripheral->triggerOn();
+    usleep(10);
+	peripheral->triggerOff();
+}
+
+
+void setup()
+{
+    // CSV setup
+    std::string logName="changeme.csv";
+    internalLogger->open(logName);
+
+    if (peripheral->init() == -1)
+    {
+        logInternalMsg("Error connecting to peripherals");
+        return;
+    }
+    
+}
