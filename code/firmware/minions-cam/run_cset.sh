@@ -11,7 +11,8 @@ cpu_freq -s 1200000
 cset shield --cpu=1-3 --kthread=on
 #cset set --cpu=$Core_c --set=c_set
 #cset set --cpu=$Core_i --set=i_set
-
-cset shield --exec -- chrt -rr 97 /home/pi/imaging/build/simple-snapimage 0 1 &
+OP_DIR=/home/pi/Minions
+cset shield --exec -- chrt -rr 97 $OP_DIR/imaging/build/simple-snapimage -s 15410110 -i 1 -d $OP_DIR/data
+IMAGING_PID=$!
 sleep 10
-cset shield --exec  -- chrt -rr 98 /home/pi/camera/build/minions
+cset shield --exec  -- chrt -rr 98 $OP_DIR/camera/build/minions $IMAGING_PID
