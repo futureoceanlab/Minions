@@ -48,6 +48,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <unistd.h>
 #include <atomic>
@@ -160,6 +161,13 @@ int main(int argc, char* argv[])
         std::cout << "Please provide the imaging firmware PID\
     and the data directory" << std::endl;
         return -1;
+    }
+    // Check the existance of the directory
+    struct stat sb;
+    if (!(stat(data_dir, &sb) == 0 && S_ISDIR(sb.st_mode)))
+    {
+        // the directory does not exist, so we create it here
+        mkdir(data_dir, 0775);
     }
     runCamera(drift_period);
 }
