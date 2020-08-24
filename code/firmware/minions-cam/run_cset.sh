@@ -15,4 +15,4 @@ OP_DIR=/home/pi/Minions
 cset shield --exec -- chrt -rr 97 $OP_DIR/imaging/build/simple-snapimage -s 15410110 -i 1 -d $OP_DIR/data
 IMAGING_PID=$!
 sleep 10
-cset shield --exec  -- chrt -rr 98 $OP_DIR/camera/build/minions $IMAGING_PID
+cset shield --exec  -- chrt -rr 98 $OP_DIR/camera/build/minions -i $IMAGING_PID -d $OP_DIR/data

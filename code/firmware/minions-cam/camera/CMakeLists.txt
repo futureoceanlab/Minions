@@ -13,5 +13,5 @@ add_executable(minions ${SOURCES})
 target_link_libraries(minions rt)
 
 # Link against wiringPi
-find_library(WIRINGPI_LIBRARIES NAMES wiringPi)
-target_link_libraries(minions ${WIRINGPI_LIBRARIES})
+#find_library(WIRINGPI_LIBRARIES NAMES wiringPi)
+#target_link_libraries(minions ${WIRINGPI_LIBRARIES})

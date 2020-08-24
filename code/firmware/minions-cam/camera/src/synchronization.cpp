@@ -118,7 +118,7 @@ int synchronize(struct timeinfo *TI, uint8_t isFirst)
 
     char timeData[8];
     char status_buf[8] = {0};
-    char ones[8] = {0xFF};
+    unsigned char ones[8] = {0xFF};
     char buffer[16] = {0}; 
 
     struct timespec T_start;

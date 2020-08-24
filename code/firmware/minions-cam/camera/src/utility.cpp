@@ -4,7 +4,7 @@
 
 bool isNotAlnum(char c);
 
-std::string run_script(std::string command) {
+std::string runScript(std::string command) {
    char buffer[128];
    std::string result = "";
 

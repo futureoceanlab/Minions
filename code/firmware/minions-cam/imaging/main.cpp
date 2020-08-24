@@ -56,9 +56,9 @@ using namespace gsttcam;
 using namespace std;
 
 // Function declaration
-int run_camera(string sn,  int exposure, int gain);
+int runCamera(string sn,  int exposure, int gain);
 int writeTiff(unsigned char *buf, char* outFileName);
-GstFlowReturn new_frame_cb(GstAppSink *appsink, gpointer data);
+GstFlowReturn newFrameCallback(GstAppSink *appsink, gpointer data);
 
 void ListProperties(TcamCamera &cam);
 void setCameraProperty(TcamCamera &cam, string property, int value);
@@ -145,15 +145,15 @@ and data directory. Type -h for help.\n";
         // the directory does not exist, so we create it here
         mkdir(dataDirName, 0775);
     }
-    run_camera(sn, exposure, gain);
+    runCamera(sn, exposure, gain);
     return 0;
 }
 
 
 /**
- * run_camera: configures and starts the camera
+ * runCamera: configures and starts the camera
  */
-int run_camera(string sn, int exposure, int gain)
+int runCamera(string sn, int exposure, int gain)
 {
     // Declare custom data structure for the callback
     CUSTOMDATA CustomData;
@@ -165,7 +165,7 @@ int run_camera(string sn, int exposure, int gain)
     // Set video format, resolution and frame rate
     cam.set_capture_format("GRAY8", FrameSize{WIDTH, HEIGHT}, FrameRate{15, 2});
     // Register a callback to be called for each new frame
-    cam.set_new_frame_callback(new_frame_cb, &CustomData);
+    cam.set_new_frame_callback(newFrameCallback, &CustomData);
     // Set camera properties for desired operation
 	setCameraProperty(cam, "Exposure Auto", 0);
 	setCameraProperty(cam, "Gain Auto", 0);
@@ -180,6 +180,9 @@ int run_camera(string sn, int exposure, int gain)
     cam.start();
     camRunning = 1;
     signal(SIGINT, signalHandler);  
+    signal(SIGTERM, signalHandler);
+    signal(SIGSTOP, signalHandler);
+    signal(SIGCONT, signalHandler);
     while (1)
     {
         if (camRunning == 0)
@@ -208,10 +211,10 @@ int run_camera(string sn, int exposure, int gain)
 
 
 /**
- * new_frame_cb: Callback called for new images by the internal appsink
+ * newFrameCallback: Callback called for new images by the internal appsink
  * In this function, we retrieve, filter and compress images.
  */
-GstFlowReturn new_frame_cb(GstAppSink *appsink, gpointer data)
+GstFlowReturn newFrameCallback(GstAppSink *appsink, gpointer data)
 {
     int i;
     const GstStructure *str;

@@ -65,8 +65,6 @@
 #define MIN 60
 #define TEN_MIN 600
 #define OFFSET 2 
-// Number of times to wait until maximum waiting duration
-#define MAX_WAIT 10
 
 // Global status for session
 #define SES_NEW 0
@@ -75,15 +73,16 @@
 
 // Flags for each timer status
 // When a bit is 1, its corresponding timer is currently running
-#define TIMER_T 0b1        // Camera Trigger
-#define TIMER_D 0b10       // Drift
-#define TIMER_S 0b100      // Stop
+#define TIMER_S 0b1         // Sync
+#define TIMER_T 0b10        // Camera Trigger
+#define TIMER_D 0b100       // Drift
+#define TIMER_E 0b1000      // Stop
 
 /* Function declaration */
-static void timerHandler(int sig, siginfo_t *si, void *uc);
+static void timer_handler(int sig, siginfo_t *si, void *uc);
 void triggerCamera();
 void setup();
-void runCamera(int drift_period);
+void runCamera(int drift_period, int sync_period);
 void logInternalMsg(std::string msg);
 
 /* Global Variables */
@@ -93,8 +92,8 @@ pid_t imaging_pid = 0;
 
 // Class instances for operation
 Peripheral *peripheral = new Peripheral(1);
-Logger *internal_logger = new Logger();
-Logger *time_logger = new Logger();
+Logger *internalLogger = new Logger();
+
 // Number of times that the unit has fallen a sleep (exponentially) to
 // wait for the next instruction from the server
 uint8_t wait_count = 0;
@@ -107,11 +106,10 @@ std::atomic_bool fDrift(false);
 std::string t_rtc;
 
 // Various timers used to timer interrupts
-timer_t triggerTimerID, driftTimerID, stopTimerID;
+timer_t triggerTimerID, syncTimerID, driftTimerID, stopTimerID;
 
 // variable to timstamp current time
-struct timespec T_now;
-long long T_now_n;
+struct timespec now;
 // time (nanoseconds) for monitoring the previous and current amount of
 // skew compared to the server
 long long T_skew_prev, T_skew_now;
@@ -120,68 +118,60 @@ long long T_skew_prev, T_skew_now;
 uint8_t session_status = SES_STOPPED;
 // bit-wise flag variable for timer status
 uint8_t timer_status = 0;
-// Directory to which the images will be saved
-char *data_dir;
+
 
 /**
  * main: entrance to the firmware. Parse input arguments.
  */
 int main(int argc, char* argv[])
 {
-    int drift_period = 15;
-    uint8_t has_pid = 0, has_data_dir = 0;
+    // TODO: (1) Get configuration parmaeter from argv
+    // TODO: Log the drift + skew time;
+    int drift_period = 15, sync_period = 300;
     for (int i = 0; i < argc; i++)
     {
         if (strcmp(argv[i], "-i") == 0)
         {
             imaging_pid = (pid_t) atoi(argv[i+1]);
-            has_pid = 1;
-        }
-        else if (strcmp(argv[i], "-w") == 0)
-        {
-            drift_period = atoi(argv[i+1]);
         }
         else if (strcmp(argv[i], "-d") == 0)
         {
-            data_dir = argv[i+1];
-            has_data_dir = 1;
+            drift_period = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-s") == 0)
+        {
+            sync_period = atoi(argv[i+1]);
         }
         else if (strcmp(argv[i], "-h") == 0)
         {
             std::cout << "\t-i\tPID of the imaging firmware\n\
-        -w\tTime after synchronization until drift computation (s)\n\
-        -d\tPath to directory to store log files\n\
-        " << std::endl;
+        -d\tTime after synchronization until drift computation (s)\n\
+        -s\tSync period (s)\n" << std::endl;
             return 0;
         }
     }
-    if (!(has_pid && has_data_dir))
-    {
-        std::cout << "Please provide the imaging firmware PID\
-    and the data directory" << std::endl;
-        return -1;
-    }
-    runCamera(drift_period);
+    runCamera(drift_period, sync_period);
 }
 
-void runCamera(int drift_period)
+void runCamera(int drift_period, int sync_period)
 {
-    long long T_trig_n, T_drift_n;
+    long long T_trig_n, T_sync_n, T_drift_n;
     int trig_period = PERIOD; 
     int status;
-    struct timespec T_trig, T_drift, T_stop;
+    struct timespec T_trig, T_sync, T_drift, T_stop;
     long long server_sec = BILLION;
     setup();
     struct timeinfo TI = {.T_skew_n = 0, .T_start_n = 0, .T_stop_n=0};
+    uint8_t hasSyncTimer = 0;
     fSync = true;
 
     // Routine for timer handling
     while (1)
     {
-        // Time to synchronize with the server
+        // set time for 10 min synchronization
         if (fSync)
         {
-            logInternalMsg("Sync: Attempt to communicate with the server");
+            logInternalMsg("Synchronize");
             int sync_status = synchronize(&TI, 0);
             
             if (sync_status == -1) 
@@ -189,14 +179,13 @@ void runCamera(int drift_period)
                 logInternalMsg("Synchronize Error");
                 sleep(4 << wait_count);
                 wait_count ++;
-                if (wait_count < MAX_WAIT)
+                if (wait_count < 10)
                     continue;
                 else
                     break;
             }            
             else if (sync_status == TERMINATE || sync_status == STOP_IMAGING)
             {
-                // A session is over, delete any running timers
                 if (session_status == SES_RUNNING)
                 {
                     session_status = SES_STOPPED;
@@ -204,14 +193,15 @@ void runCamera(int drift_period)
                         timer_delete(triggerTimerID);
                     if (timer_status & TIMER_D)
                         timer_delete(driftTimerID); 
-                    if (timer_status & TIMER_S)
+                    if (timer_status & TIMER_E)
                         timer_delete(stopTimerID);
+                    if (timer_status & TIMER_S)
+                        timer_delete(syncTimerID);
                     timer_status = 0;
                     // Tell the imaging firmware to stop
                     kill(imaging_pid, SIGSTOP);
+
                 }
-                // We are terminating, break out of the while loop and also
-                // inform the imaging firmware to terminate
                 if (sync_status == TERMINATE)
                 {
                     // Tell the imaging firmware to terminate
@@ -221,9 +211,7 @@ void runCamera(int drift_period)
                 }
                 else
                 {
-                    // In the case of terminate/stop, time to wait is specified in
-                    // TI.T_skew_n variable. If it is 0, then the communication with
-                    // the server went wrong. 
+                    // If we know the snap_simpeimage is running, we should kill it!
                     // If we still have sessions left, this will naturally go back to 
                     // sync polling upon waking up from the sleep(wait_duration) 
                     if (TI.T_skew_n == 0)
@@ -231,14 +219,13 @@ void runCamera(int drift_period)
                         logInternalMsg("Sync: server not ready, wait exponentially");
                         sleep(4 << wait_count);
                         wait_count ++;
-                        if (wait_count < MAX_WAIT)
+                        if (wait_count < 10)
                             continue;
                         else
                             break;
                     }
                     else
                     {
-                    // We have been informed to wait a specific amount of time
                         wait_count = 0;
                         int wait_duration = (int) (TI.T_skew_n / BILLION)+1;
                         std::ostringstream msg_stream;
@@ -249,6 +236,13 @@ void runCamera(int drift_period)
                     continue;
                 }
             }
+            logInternalMsg("Sync: Successful communication");
+            wait_count = 0;
+            as_timespec(TI.T_start_n, &T_trig);
+            T_trig_n = TI.T_start_n;
+            T_skew_now = TI.T_skew_n;
+            T_drift_n = T_trig_n + drift_period*server_sec + server_sec/OFFSET;
+            as_timespec(T_drift_n, &T_drift);
             //
             // We are in a proper running status 
             //
@@ -256,56 +250,37 @@ void runCamera(int drift_period)
             // (1) Set a camera trigger to the right time
             // (2) Set a next drift time
             // if the beginning of a session, we need to run snap_simpleimage 
-            logInternalMsg("Sync: Successful communication");
-            wait_count = 0;
-            as_timespec(TI.T_start_n, &T_trig);
-            T_trig_n = TI.T_start_n;
-            T_skew_now = TI.T_skew_n;
-            as_timespec(TI.T_stop_n, &T_stop);
-
-            T_drift_n = T_trig_n + drift_period*server_sec + server_sec/OFFSET;
-            as_timespec(T_drift_n, &T_drift);
-
-
             if (session_status == SES_STOPPED)
             {
-            // Start a new session
                 session_status = SES_RUNNING;
+                T_sync_n = T_trig_n;
+                as_timespec(TI.T_stop_n, &T_stop);
                 // Run simple_snapimage
                 kill(imaging_pid, SIGCONT);
                 // Trigger
-                status = makeTimer(&triggerTimerID, &T_trig, PERIOD, 0, &timerHandler);
+                status = makeTimer(&triggerTimerID, &T_trig, PERIOD, 0, &timer_handler);
                 // Drift
-                status = makeTimer(&driftTimerID, &T_drift, 0, 0, &timerHandler); //MIN, server_sec/4);
-                // Timer until the end of this session
-                status = makeTimer(&stopTimerID, &T_stop, 0, 0, &timerHandler);
-                timer_status |= (TIMER_T | TIMER_D | TIMER_S);
+                status = makeTimer(&driftTimerID, &T_drift, 0, 0, &timer_handler); //MIN, server_sec/4);
+                status = makeTimer(&stopTimerID, &T_stop, 0, 0, &timer_handler);
+                timer_status |= (TIMER_T | TIMER_D | TIMER_E);
             }
             else
             {
                 resetTimer(&triggerTimerID, &T_trig, server_sec*PERIOD);
                 resetTimer(&driftTimerID, &T_drift, 0);
             }
-
-            // TODO: Save T_skew_now, T_start_n and T_stop
-            std::ostringstream t_data;
-            clock_gettime(CLOCK_REALTIME, &T_now);
-            T_now_n = as_nsec(&T_now);
-            t_data << T_now_n << "," << T_skew_now << "," << T_trig_n << "," << TI.T_stop_n << "\n";
-            time_logger->write(t_data.str());
-
             fSync = 0;
         }
 
-        // Time to compute the amount of drift between the server and the client
+        // set time for 1 min drift computation
         if (fDrift)
         {
-            logInternalMsg("Drift: Attempt communication with the server.");
+            logInternalMsg("Compute Drift");
             T_skew_prev = T_skew_now;
+			//clock_gettime(CLOCK_REALTIME, &now);
             int skew_status = get_skew(&TI);
             if (skew_status == -1) 
             {
-                // In the case of communication error, we move to sync as default
                 fDrift=0;
                 fSync = 1;
                 logInternalMsg("Drift: server communication error");
@@ -313,14 +288,13 @@ void runCamera(int drift_period)
             } 
             else if (skew_status == STOP_IMAGING || skew_status == TERMINATE)
             {
-                // In stop/terminate, we also adjust the status in sync above
-                logInternalMsg("Drift: stop imaging or terminate from server.");
+                logInternalMsg("Drift: stop imaging or terminate from server");
                 fSync = 1;
                 fDrift = 0;
                 wait_count = 0;
                 continue;
             }
-            logInternalMsg("Drift: Successful communication.");
+            logInternalMsg("Drift: Successful communication");
 			T_skew_now = TI.T_skew_n;
 
             // T_diff is skew difference over a minute that could be locally
@@ -334,30 +308,36 @@ void runCamera(int drift_period)
             T_trig_n += (drift_period+1) * server_sec;
             as_timespec(T_trig_n, &T_trig);
             resetTimer(&triggerTimerID, &T_trig, server_sec*PERIOD);
-            // TODO: Save T_skew_now and server_sec
-            std::ostringstream t_data;
-            clock_gettime(CLOCK_REALTIME, &T_now);
-            T_now_n = as_nsec(&T_now);
-            t_data << T_now_n << "," << T_skew_now << ",,," << server_sec << "\n";
-            time_logger->write(t_data.str());
+
+            // reset synchronization time with new server second
+            T_sync_n = T_sync_n + sync_period * server_sec + server_sec/OFFSET;
+            as_timespec(T_sync_n, &T_sync);
+            if (!hasSyncTimer)
+            {
+                makeTimer(&syncTimerID, &T_sync, 0, 0, &timer_handler); //TEN_MIN, server_sec/4);
+                timer_status |= TIMER_S;
+            }
+            else
+            {
+                resetTimer(&syncTimerID, &T_sync, 0);
+            }
             fDrift = 0;
         }
         if (!(fSync || fDrift))
         {
             // sleep for 1ms
-            usleep(1000);
+            usleep(10);
         }
     }
-    // Done with the deployment, terminate and close off everything.
-    internal_logger->close();
-    time_logger->close();
+    internalLogger->close();
+    // Done Data Acquisition
+    // Programmed data acquisition duration elapsed
+    //  - Regularly measure depth and temperature until powered off.
     return;
 }
 
-/**
- * timerHandler: timer interrupt handler. 
- */
-static void timerHandler(int sig, siginfo_t *si, void *uc)
+
+static void timer_handler(int sig, siginfo_t *si, void *uc)
 {
     timer_t *tidp;
     tidp = (timer_t *) si->si_value.sival_ptr;
@@ -365,14 +345,16 @@ static void timerHandler(int sig, siginfo_t *si, void *uc)
     {
         triggerCamera();
     }
+    else if ( *tidp == syncTimerID)
+    {
+        fSync = true;
+    }
     else if ( *tidp == driftTimerID )
     {
-        // Alter the drift flag
         fDrift = true;
     }
     else if (*tidp == stopTimerID)
     {
-        // Terminate running timers
         fSync = true;
         if (session_status == SES_RUNNING)
         {
@@ -382,23 +364,24 @@ static void timerHandler(int sig, siginfo_t *si, void *uc)
                 timer_delete(triggerTimerID);
             if (timer_status & TIMER_D)
                 timer_delete(driftTimerID); 
-            if (timer_status & TIMER_S)
+            if (timer_status & TIMER_E)
                 timer_delete(stopTimerID);
+            if (timer_status & TIMER_S)
+                timer_delete(syncTimerID);
             timer_status = 0;
             kill(imaging_pid, SIGSTOP);
         }
     }
 }
 
-/**
- * logInternalMsg
- */
+
+
 void logInternalMsg(std::string msg)
 {
     #ifdef DEBUG
     std::cout << msg << std::endl;
     #endif
-    internal_logger->logMsg(msg);
+    internalLogger->logMsg(msg);
 }
 
 
@@ -414,19 +397,10 @@ void triggerCamera()
 
 void setup()
 {
-    // Timestamp now
-    clock_gettime(CLOCK_REALTIME, &T_now);
-    long long t_now_sec = T_now.tv_sec;
+    // CSV setup
+    std::string logName="changeme.csv";
+    internalLogger->open(logName);
 
-    // Create log file names
-    std::ostringstream internal_log_name, time_log_name;
-    internal_log_name << data_dir << "/" << t_now_sec << "_log.txt";
-    time_log_name << data_dir << "/" << t_now_sec << "_time.csv";
-
-    // Open respective log file
-    time_logger->open(time_log_name.str());
-    time_logger->write(std::string("Timestamp (s),T_skew,T_start,T_stop,server sec\n"));
-    internal_logger->open(internal_log_name.str());
     if (peripheral->init() == -1)
     {
         logInternalMsg("Error connecting to peripherals");
