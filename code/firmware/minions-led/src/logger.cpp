@@ -3,38 +3,45 @@
 
 Logger::Logger()
 {
-    logCount = 0;
-    logFlushCount = 10;
+    log_count = 0;
+    log_flush_count = 10;
 }
 
 Logger::Logger(uint8_t maxCount)
 {
-    logCount = 0;
-    logFlushCount = maxCount;
+    log_count = 0;
+    log_flush_count = maxCount;
 }
 
 void Logger::open(std::string path)
 {
-    logPath = path;
-    logF.open(logPath);
-    logF << std::fixed;
-    logF.precision(2);
-    logF << "Timestamp(ns),RTC,Pressure(mbar),Temperature(C)\n";
+    log_path = path;
+    log_file.open(log_path);
+    log_file << std::fixed;
+    log_file.precision(2);
 }
+
+
+void Logger::write(std::string msg)
+{
+    log_file << msg;
+    log_file.flush();
+}
+
 
 void Logger::logData(std::string t_rtc, float pressure, float temperature)
 {
     clock_gettime(CLOCK_MONOTONIC, &T_now);
     t_nsec = as_nsec(&T_now);
-    logF << t_nsec << ",";
-    logF << t_rtc << ",";
-    logF << pressure << ",";
-    logF << temperature << "\n";
-    logCount++;
-    if (logCount > logFlushCount)
+    log_file << t_nsec << ",";
+    log_file << t_rtc << ",";
+    log_file << pressure << ",";
+    log_file << temperature << "\n";
+    log_count++;
+    if (log_count > log_flush_count)
     {
-        logF.flush();
-        logCount = 0;
+        log_file.flush();
+        log_count = 0;
     }
 }
 
@@ -42,14 +49,14 @@ void Logger::logMsg(std::string msg)
 {
     clock_gettime(CLOCK_MONOTONIC, &T_now);
     t_nsec = as_nsec(&T_now);
-    logF << t_nsec;
-    logF << " ";
-    logF << msg;
-    logF << "\r\n";
-    logF.flush();
+    log_file << t_nsec;
+    log_file << " ";
+    log_file << msg;
+    log_file << "\r\n";
+    log_file.flush();
 }
 
 void Logger::close()
 {
-    logF.close();
+    log_file.close();
 }

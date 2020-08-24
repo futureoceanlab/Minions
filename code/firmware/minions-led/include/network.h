@@ -16,7 +16,7 @@
 #define PORT 8080               // Port number for communication
 
 
-void configure_master_socket(int *master_socket, int *opt, struct sockaddr_in *address);
-int handle_connection(fd_set *readfds, int *master_socket, struct sockaddr_in *address, int addrlen, int client_socket[], int max_clients);
+void configureMasterSocket(int *master_socket, int *opt, struct sockaddr_in *address);
+int handleConnection(fd_set *readfds, int *master_socket, struct sockaddr_in *address, int addrlen, int client_socket[], int max_clients);
 
 #endif

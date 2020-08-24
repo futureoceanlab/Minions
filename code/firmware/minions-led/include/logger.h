@@ -14,19 +14,19 @@ class Logger
 public:
     Logger();
     Logger(uint8_t maxCount);
-
+    void write(std::string msg);
     void logData(std::string t_rtc, float pressure, float temperature);
     void logMsg(std::string msg);
     void open(std::string path);
     void close();
 
 private:
-    uint8_t logCount;
-    uint8_t logFlushCount;
+    uint8_t log_count;
+    uint8_t log_flus_count;
     struct timespec T_now;
     long long t_nsec;
-    std::string logPath;
-    std::ofstream logF;
+    std::string log_path;
+    std::ofstream log_file;
 };
 
 #endif

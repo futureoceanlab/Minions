@@ -77,16 +77,16 @@ using namespace std;
 /**
  * Function Declaration
  */
-int run_LED();
-static void timer_handler(int sig, siginfo_t *si, void *uc);
-void led_timer_handler();
-void log_timer_handler();
-bool check_depth();
-int start_mission();
-int handle_trigger_request(char timeData[], long long trig_period, int cli_id);
-int handle_session_change(long long trig_period);
-int handle_sync_request(char timeData[], int cli_id);
-void log_internal_msg(string msg);
+int runLED();
+static void timerHandler(int sig, siginfo_t *si, void *uc);
+void ledTimerHandler();
+void logTimerHandler();
+bool checkDepth();
+int startMission();
+int handleTriggerRequest(char timeData[], long long trig_period, int cli_id);
+int handleSessionChange(long long trig_period);
+int handleSyncRequest(char timeData[], int cli_id);
+void logInternalMsg(string msg);
 
 
 /**
@@ -183,7 +183,7 @@ int main(int argc, char* argv[])
     session_period *= 60;       // seconds
     wait_duration *= 60;        // seconds
     // Run the main program
-    run_LED();
+    runLED();
 }
 
 
@@ -203,27 +203,28 @@ int main(int argc, char* argv[])
  *          i) disconnected / error 
  *          ii)serve synchornization inquiries
  */
-int run_LED()
+int runLED()
 {
     long long trig_period = (long long) (1/framerate)*BILLION;
     uint8_t cli_status[2] = {!TERMINATED};    
 
     // Setup logs
-    rtc_time = run_script("/home/pi/rtc.sh");
+    rtc_time = runScript("/home/pi/rtc.sh");
     ostringstream internalLogName, dataLogName;
     internalLogName << rtc_time << "_log.txt";
     dataLogName << rtc_time << "_data.csv";
     dataLogger->open(dataLogName.str());
+    dataLogger->write("Timestamp(ns),RTC,Pressure(mbar),Temperature(C)\n".str());
     internalLogger->open(internalLogName.str());
 
-    log_internal_msg("The LED booted up");
+    logInternalMsg("The LED booted up");
     clock_gettime(CLOCK_MONOTONIC, &T_now);
-    makeTimer(&logTimerID, &T_now, 1, 0, &timer_handler);
+    makeTimer(&logTimerID, &T_now, 1, 0, &timerHandler);
 
     // Initialize peripherals    
     if (peripheral->init() == -1)
     {
-        log_internal_msg("error connecting to the peripherals");
+        logInternalMsg("error connecting to the peripherals");
         return -1;
     }
 
@@ -231,7 +232,7 @@ int run_LED()
     int max_clients = 2, opt=1;
     int client_socket[max_clients] = {0};
     struct sockaddr_in address;   
-    configure_master_socket(&master_socket, &opt, &address);
+    configureMasterSocket(&master_socket, &opt, &address);
     //set of socket descriptors  
     fd_set readfds;   
     //accept the incoming connection  
@@ -245,19 +246,19 @@ int run_LED()
     while(1)   
     {   
         // a) Check and start mission
-        if (!fRunning && check_depth())
+        if (!fRunning && checkDepth())
         {
-            start_mission();            
+            startMission();            
             fRunning = true;
         }
         // b) Control imaging/lighting based on the sessions
         if (fSessionChanged)
         {
-            handle_session_change(trig_period);
+            handleSessionChange(trig_period);
             fSessionChanged = false;
         }
         // c) Check Connection
-        int conn_status = handle_connection(&readfds, &master_socket, &address, addrlen, client_socket, max_clients);
+        int conn_status = handleConnection(&readfds, &master_socket, &address, addrlen, client_socket, max_clients);
         if (conn_status == 1)
             continue;
 
@@ -276,7 +277,7 @@ int run_LED()
                 getpeername(sd , (struct sockaddr*)&address, (socklen_t*)&addrlen);   
                 msg_stream.str("");
                 msg_stream << inet_ntoa(address.sin_addr) << " disconnected"; 
-                log_internal_msg(msg_stream.str());
+                logInternalMsg(msg_stream.str());
                 //Close the socket and mark as 0 in list for reuse  
                 close( sd );   
                 client_socket[i] = 0;   
@@ -287,7 +288,7 @@ int run_LED()
                 getpeername(sd , (struct sockaddr*)&address, (socklen_t*)&addrlen);   
                 msg_stream.str("");
                 msg_stream << inet_ntoa(address.sin_addr) << " socket error"; 
-                log_internal_msg(msg_stream.str());
+                logInternalMsg(msg_stream.str());
                 perror("Socket: ");
                 continue;
             }
@@ -300,13 +301,13 @@ int run_LED()
                 char timeData[16] = {0};
                 if (rec_T > 1) 
                 {
-                    handle_sync_request(timeData, i);
+                    handleSyncRequest(timeData, i);
                 }
                 // client sends 0 to let server know that sychronization is
                 // complete and it is ready to receive trigger start time.
                 else if (rec_T == 0)
                 {
-                    handle_trigger_request(timeData, trig_period, i);
+                    handleTriggerRequest(timeData, trig_period, i);
                 }
                 // Send the response
                 int send_status = send(sd, timeData, 16, 0);   
@@ -320,30 +321,30 @@ int run_LED()
     // The deployment has terminated. Wrap up
     timer_delete(logTimerID);
     dataLogger->close();
-    log_internal_msg("Mission Complete. Bye Bye");
+    logInternalMsg("Mission Complete. Bye Bye");
     internalLogger->close();
     return 0;   
 }
 
 
 /**
- * timer_handler: When there is a timer interrupt, identify which timer,
+ * timerHandler: When there is a timer interrupt, identify which timer,
  * and serve accordingly. In total, there are four possible timers. LED strobe,
  * sensor data log, stop imaging and start imaging
  */
-static void timer_handler(int sig, siginfo_t *si, void *uc)
+static void timerHandler(int sig, siginfo_t *si, void *uc)
 {
     timer_t *tidp;
     tidp = (timer_t *) si->si_value.sival_ptr;
     // LED
     if ( *tidp == ledTimerID )
     {
-        led_timer_handler();
+        ledTimerHandler();
     }
     // Log
     else if ( *tidp == logTimerID)
     {
-        log_timer_handler();
+        logTimerHandler();
     }
     else if ( *tidp == imageStopTimerID )
     {
@@ -362,9 +363,9 @@ static void timer_handler(int sig, siginfo_t *si, void *uc)
 
 
 /**
- * log_timer_handler: write rtc and peripheral data to a log csv file
+ * logTimerHandler: write rtc and peripheral data to a log csv file
  */
-void log_timer_handler()
+void logTimerHandler()
 {
     // Update with new RTC value to track internal clock drift
     if (c_count % 600 == 0)
@@ -384,9 +385,9 @@ void log_timer_handler()
 
 
 /**
- * led_timer_handler: produce 10ms long periodic strobing
+ * ledTimerHandler: produce 10ms long periodic strobing
  */
-void led_timer_handler()
+void ledTimerHandler()
 {
     peripheral->ledOn();
     usleep(10000);
@@ -396,9 +397,9 @@ void led_timer_handler()
 }
 
 /**
- * check_depth: check if the target depth has been passed
+ * checkDepth: check if the target depth has been passed
  */
-bool check_depth()
+bool checkDepth()
 {
     #ifdef DEBUG
     return true;
@@ -409,7 +410,7 @@ bool check_depth()
 
 
 /**
- * handle_sync_request:
+ * handleSyncRequest:
  *      char timeData[]: char array to be modified with appropriate response
  *                       it is 16-bit long
  *      int cli_id: internal id of the client
@@ -418,7 +419,7 @@ bool check_depth()
  * of the deployemt (session running/stopped or terminated)
  * 
  */
-int handle_sync_request(char timeData[], int cli_id)
+int handleSyncRequest(char timeData[], int cli_id)
 {
     // T2 for synchronization
     struct timespec T2;
@@ -454,7 +455,7 @@ int handle_sync_request(char timeData[], int cli_id)
 
                 msg_stream.str("");
                 msg_stream << "Client " << cli_id  << " sleep for " << T_wait_n/BILLION << " seconds";
-                log_internal_msg(msg_stream.str());
+                logInternalMsg(msg_stream.str());
                 
                 // Respond wait duration 
                 as_timespec(T_wait_n, &T_wait);
@@ -471,7 +472,7 @@ int handle_sync_request(char timeData[], int cli_id)
     {
         msg_stream.str("");
         msg_stream << "Client " << cli_id  << " terminate";
-        log_internal_msg(msg_stream.str());
+        logInternalMsg(msg_stream.str());
         // Respond with (1, 0), which means to terminate
         timeData[4] = 1;
         //cli_status[i] = TERMINATED;
@@ -483,14 +484,14 @@ int handle_sync_request(char timeData[], int cli_id)
 
 
 /**
- * handle_trigger_request:
+ * handleTriggerRequest:
  *      timeData[]: char array with modified response
  *      trig_period: LED trigger period
  *      cli_id: internal id of the client
  * 
  * The client asks for the last trigger for synchronization. 
  */
-int handle_trigger_request(char timeData[], long long trig_period, int cli_id)
+int handleTriggerRequest(char timeData[], long long trig_period, int cli_id)
 {
     // Provide the last trigger*/
     struct timespec T_last_trig;
@@ -515,42 +516,42 @@ int handle_trigger_request(char timeData[], long long trig_period, int cli_id)
     // Log
     msg_stream.str("");
     msg_stream << "Client " << cli_id  << ": last trigger (" << last_trigger << ", " << T_end_n << ")";
-    log_internal_msg(msg_stream.str());
+    logInternalMsg(msg_stream.str());
 }
 
 /**
- * handle_session_change: 
+ * handleSessionChange: 
  *      trig_period: LED trigger period
  * 
  * Change the timers that corresponds to the recent session change
  */
-int handle_session_change(long long trig_period)
+int handleSessionChange(long long trig_period)
 {
     // Session Stop
     if (fStopImaging)
     {
-        log_internal_msg("Session stopped");
+        logInternalMsg("Session stopped");
         // Disarm the LED timer
         if (timer_status & TIMER_L)                
         {
-            log_internal_msg("Disarm LED alarm");
+            logInternalMsg("Disarm LED alarm");
             timer_delete(ledTimerID);
             timer_status &= (~TIMER_L);
         }
         // Termination
         if (cur_session > n_sessions)
         {
-            log_internal_msg("Mission Over - Terminate");
+            logInternalMsg("Mission Over - Terminate");
             // Handle Termination
             // all of the sessions have been made. Stop taking images
             if (timer_status & TIMER_S)
             {
-                log_internal_msg("Disarm Image start alarm");
+                logInternalMsg("Disarm Image start alarm");
                 timer_delete(imageStartTimerID);
             }
             if (timer_status & TIMER_E)
             {
-                log_internal_msg("Disarm IMage end alarm");
+                logInternalMsg("Disarm IMage end alarm");
                 timer_delete(imageStopTimerID);
             }
             timer_status &= ~(TIMER_S | TIMER_E);
@@ -569,23 +570,23 @@ int handle_session_change(long long trig_period)
         as_timespec(trig_period, &T_Period);
 
         // Make a timer for LED strobing
-        makeTimer(&ledTimerID, &T_start, T_Period.tv_sec, T_Period.tv_nsec, &timer_handler);
+        makeTimer(&ledTimerID, &T_start, T_Period.tv_sec, T_Period.tv_nsec, &timerHandler);
         timer_status |= TIMER_L;
 
         // Log
         msg_stream.str("");
         msg_stream.clear();
         msg_stream << "Start session " << cur_session;
-        log_internal_msg(msg_stream.str());
+        logInternalMsg(msg_stream.str());
     }
 }
 
 
 /**
- * start_mission: Once the target depth has been reached, set up the 
+ * startMission: Once the target depth has been reached, set up the 
  * session reltaed timers
  */
-int start_mission()
+int startMission()
 {
     // Timestamp current time
     clock_gettime(CLOCK_MONOTONIC, &T_now);
@@ -597,18 +598,18 @@ int start_mission()
     as_timespec(T_session_end_n, &T_session_end); 
 
     // Create timer to start the sessions
-    makeTimer(&imageStartTimerID, &T_session_start, session_period, 0, &timer_handler);
+    makeTimer(&imageStartTimerID, &T_session_start, session_period, 0, &timerHandler);
     // Create timer to stop the sessions
-    makeTimer(&imageStopTimerID, &T_session_end, session_period, 0, &timer_handler );
+    makeTimer(&imageStopTimerID, &T_session_end, session_period, 0, &timerHandler );
     timer_status |= (TIMER_S | TIMER_E);
-    log_internal_msg("Imaging start and end timer good to go.");
+    logInternalMsg("Imaging start and end timer good to go.");
     return 0;
 }
 
 /**
  *  log_intenral_msg: logs a given message on a txt file
  */
-void log_internal_msg(string msg)
+void logInternalMsg(string msg)
 {
     #ifdef DEBUG
     std::cout << msg << std::endl;

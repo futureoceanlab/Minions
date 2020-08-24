@@ -12,6 +12,6 @@
 #include <sys/time.h>       // FD_SET, FD_ISSET, FD_ZERO macros  
 #include <time.h>           // time_sepc
 
-std::string run_script(std::string command);
+std::string runScript(std::string command);
 int makeTimer(timer_t *timerID, struct timespec *T_timer_start, int it_sec, int it_nsec, void (*handler)(int, siginfo_t*, void*));
 #endif
