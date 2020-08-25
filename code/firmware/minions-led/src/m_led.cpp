@@ -214,7 +214,7 @@ int runLED()
     internalLogName << rtc_time << "_log.txt";
     dataLogName << rtc_time << "_data.csv";
     dataLogger->open(dataLogName.str());
-    dataLogger->write("Timestamp(ns),RTC,Pressure(mbar),Temperature(C)\n".str());
+    dataLogger->write(string("Timestamp(ns),RTC,Pressure(mbar),Temperature(C)\n"));
     internalLogger->open(internalLogName.str());
 
     logInternalMsg("The LED booted up");
@@ -370,7 +370,7 @@ void logTimerHandler()
     // Update with new RTC value to track internal clock drift
     if (c_count % 600 == 0)
     {
-        rtc_time = run_script("/home/pi/rtc.sh");
+        rtc_time = runScript("/home/pi/rtc.sh");
         c_count = 0;
     } 
     else 
