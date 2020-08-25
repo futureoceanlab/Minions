@@ -37,19 +37,19 @@ void handler(int signo)
 }
 
 
-long long as_nsec(struct timespec *T)
+long long asNanosec(struct timespec *T)
 {
     return ((long long) T->tv_sec) * BILLION + (long long) T->tv_nsec;
 }
 
-long long bytes_to_nsec(char *buffer)
+long long bytesToNanosec(char *buffer)
 {
     time_t sec = (buffer[3] << 24) | (buffer[2] << 16) | (buffer[1] << 8) | buffer[0];  
     int nsec = (buffer[7] << 24) | (buffer[6] << 16) | (buffer[5] << 8) | buffer[4];
     return ((long long) sec) * BILLION + (long long) nsec;
 }
 
-void as_timespec(long long t, struct timespec *T)
+void asTimespec(long long t, struct timespec *T)
 {
     T->tv_sec = (long) (t / BILLION);
     T->tv_nsec = (long) (t % BILLION);
@@ -103,23 +103,23 @@ int main(int argc, char const *argv[])
         // Timestamp T4
         clock_gettime(CLOCK_REALTIME, &T4);
         // Receive T2 and T3
-        T2n = bytes_to_nsec(buffer);
-        T3n = bytes_to_nsec(buffer+8);
+        T2n = bytesToNanosec(buffer);
+        T3n = bytesToNanosec(buffer+8);
         //time_t T3_sec_i = (buffer[11] << 24) | (buffer[10] << 16) | (buffer[9] << 8) | buffer[8];  
         //int T3_nsec_i = (buffer[15] << 24) | (buffer[14] << 16) | (buffer[13] << 8) | buffer[12];
         //struct timespec T2 = {.tv_sec = T2_sec_i, .tv_nsec=T2_nsec_i};
         //T3.tv_sec = T3_sec_i;
         //T3.tv_nsec = T3_nsec_i;
-        T1n = as_nsec(&T1);
-        //T2n = as_nsec(&T2);
-        //T3n = as_nsec(&T3);
-        T4n = as_nsec(&T4);
+        T1n = asNanosec(&T1);
+        //T2n = asNanosec(&T2);
+        //T3n = asNanosec(&T3);
+        T4n = asNanosec(&T4);
         T_skew_n += ((T2n - T1n) - (T4n - T3n));
     }
     // compute average time skew
     T_skew_n /= (NUM_AVG * 2);
     struct timespec T_skew;
-    as_timespec(T_skew_n, &T_skew);
+    asTimespec(T_skew_n, &T_skew);
     printf("%lld skew: %d.%d\n", T_skew_n, T_skew.tv_sec, T_skew.tv_nsec);
 
     // Ping the server to about start time
@@ -135,7 +135,7 @@ int main(int argc, char const *argv[])
             // the server has moved onto timer, so we will break
             break;
         }
-        temp_n = bytes_to_nsec(buffer);
+        temp_n = bytesToNanosec(buffer);
         printf("%lld\n", temp_n);
         if (temp_n > 1)
         {
@@ -148,9 +148,9 @@ int main(int argc, char const *argv[])
     printf("start: %lld\n", T_start_n);
     T_start_n -= T_skew_n;
     //struct timespec T_delay = {.tv_sec = 5, .tv_nsec = 0};
-    //long long T_delay_n = as_nsec(&T_delay);
+    //long long T_delay_n = asNanosec(&T_delay);
     //long long T_start_n = T3n - T_skew_n + T_delay_n;
-    as_timespec(T_start_n, &T_start);
+    asTimespec(T_start_n, &T_start);
     timer_t t_id;
     struct itimerspec tim_spec = {.it_interval= {.tv_sec=1,.tv_nsec=0},
                     .it_value = T_start};

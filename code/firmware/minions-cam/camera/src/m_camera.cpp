@@ -188,7 +188,7 @@ void runCamera(int drift_period, int sync_period)
         if (fSync)
         {
             logInternalMsg("Sync: Attempt to communicate with the server");
-            int sync_status = synchronize(&TI, 0);
+            int sync_status = synchronize(&TI, 1);
             
             if (sync_status == -1) 
             {
@@ -234,7 +234,7 @@ void runCamera(int drift_period, int sync_period)
                     // the server went wrong. 
                     // If we still have sessions left, this will naturally go back to 
                     // sync polling upon waking up from the sleep(wait_duration) 
-                    if (TI.T_skew_n == 0)
+                    if (TI.T_wait_n == 0)
                     {
                         logInternalMsg("Sync: server not ready, wait exponentially");
                         sleep(4 << wait_count);
@@ -248,7 +248,7 @@ void runCamera(int drift_period, int sync_period)
                     {
                     // We have been informed to wait a specific amount of time
                         wait_count = 0;
-                        int wait_duration = (int) (TI.T_skew_n / BILLION)+1;
+                        int wait_duration = (int) (TI.T_wait_n / BILLION)+1;
                         std::ostringstream msg_stream;
                         msg_stream << "Sync: server wait " << wait_duration;
                         logInternalMsg(msg_stream.str());
@@ -266,13 +266,13 @@ void runCamera(int drift_period, int sync_period)
             // if the beginning of a session, we need to run snap_simpleimage 
             logInternalMsg("Sync: Successful communication");
             wait_count = 0;
-            as_timespec(TI.T_start_n, &T_trig);
+            asTimespec(TI.T_start_n, &T_trig);
             T_trig_n = TI.T_start_n;
             T_skew_now = TI.T_skew_n;
-            as_timespec(TI.T_stop_n, &T_stop);
+            asTimespec(TI.T_stop_n, &T_stop);
 
             T_drift_n = T_trig_n + drift_period*server_sec + server_sec/OFFSET;
-            as_timespec(T_drift_n, &T_drift);
+            asTimespec(T_drift_n, &T_drift);
 
 
             if (session_status == SES_STOPPED)
@@ -299,7 +299,7 @@ void runCamera(int drift_period, int sync_period)
             // TODO: Save T_skew_now, T_start_n and T_stop
             std::ostringstream t_data;
             clock_gettime(CLOCK_REALTIME, &T_now);
-            T_now_n = as_nsec(&T_now);
+            T_now_n = asNanosec(&T_now);
             t_data << T_now_n << "," << T_skew_now << "," << T_trig_n << "," << TI.T_stop_n << "\n";
             time_logger->write(t_data.str());
 
@@ -311,7 +311,7 @@ void runCamera(int drift_period, int sync_period)
         {
             logInternalMsg("Drift: Attempt communication with the server.");
             T_skew_prev = T_skew_now;
-            int skew_status = get_skew(&TI);
+            int skew_status = synchronize(&TI, 0);
             if (skew_status == -1) 
             {
                 // In the case of communication error, we move to sync as default
@@ -341,12 +341,12 @@ void runCamera(int drift_period, int sync_period)
             double server_period = double((T_skew_now - T_skew_prev)/drift_period + BILLION); 
             server_sec = (long long) (double(BILLION) * (double(BILLION)/server_period));
             T_trig_n += (drift_period+1) * server_sec;
-            as_timespec(T_trig_n, &T_trig);
+            asTimespec(T_trig_n, &T_trig);
             resetTimer(&triggerTimerID, &T_trig, server_sec*PERIOD);
 
             // reset synchronization time with new server second
             T_sync_n = T_sync_n + sync_period * server_sec + server_sec/OFFSET;
-            as_timespec(T_sync_n, &T_sync);
+            asTimespec(T_sync_n, &T_sync);
             if (!hasSyncTimer)
             {
                 makeTimer(&syncTimerID, &T_sync, 0, 0, &timerHandler); //TEN_MIN, server_sec/4);
@@ -360,7 +360,7 @@ void runCamera(int drift_period, int sync_period)
             // Save T_skew_now and server_sec
             std::ostringstream t_data;
             clock_gettime(CLOCK_REALTIME, &T_now);
-            T_now_n = as_nsec(&T_now);
+            T_now_n = asNanosec(&T_now);
             t_data << T_now_n << "," << T_skew_now << ",,," << server_sec << "\n";
             time_logger->write(t_data.str());
             fDrift = 0;

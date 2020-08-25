@@ -243,7 +243,7 @@ int m_led_run()
                 else 
                 {   
                     clock_gettime(CLOCK_REALTIME, &T2);
-                    long long rec_T = bytes_to_nsec(buffer);
+                    long long rec_T = bytesToNanosec(buffer);
                     // clients are responding with its T1 value to receive
                     // more time information for synchronization
                     if (rec_T > 1) 
@@ -272,9 +272,9 @@ int m_led_run()
                         {
                             if (T_start.tv_sec == 0 && T_start.tv_nsec == 0)
                             {
-                                long long T2n = as_nsec(&T2);
+                                long long T2n = asNanosec(&T2);
                                 T2n += 2*BILLION;
-                                as_timespec(T2n, &T_start);
+                                asTimespec(T2n, &T_start);
                             } 
                             // clients request for resynchronization, give them the 
                             // last trigger

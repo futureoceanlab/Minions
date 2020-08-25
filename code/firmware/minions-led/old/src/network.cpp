@@ -1,6 +1,9 @@
 #include "network.h"
 
-
+/**
+ * configureMasterSocket: configure the master socket that will facilitate
+ * multiple socket connections at the same time.
+ */
 void configureMasterSocket(int *master_socket, int *opt, struct sockaddr_in *address)
 {
     //create a master socket  
@@ -40,7 +43,12 @@ void configureMasterSocket(int *master_socket, int *opt, struct sockaddr_in *add
     }   
 }
 
-int handleConnection(fd_set *readfds, int *master_socket, struct sockaddr_in *address, int addrlen, int client_socket[], int max_clients)
+/**
+ * handleConnection: establish a new connection and attach the new socket
+ *  to the master socket
+ */
+int handleConnection(fd_set *readfds, int *master_socket, 
+struct sockaddr_in *address, int addrlen, int client_socket[], int max_clients)
 {
     int sd, max_sd, new_socket;
     struct timeval tv;
@@ -109,10 +117,11 @@ int handleConnection(fd_set *readfds, int *master_socket, struct sockaddr_in *ad
             //if position is empty  
             if( client_socket[j] == 0 )   
             {   
+                // Set a wait duration at most specified in tv
                 setsockopt(new_socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
                 client_socket[j] = new_socket;   
 //                  printf("Adding to list of sockets as %d\n" , i);   
-                     
+                    
                 break;   
             }   
         }   

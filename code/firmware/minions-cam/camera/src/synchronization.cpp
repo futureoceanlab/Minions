@@ -3,35 +3,46 @@
 #include "synchronization.h"
 
 
-long long as_nsec(struct timespec *T)
+long long asNanosec(struct timespec *T)
 {
     return ((long long) T->tv_sec) * BILLION + (long long) T->tv_nsec;
 }
 
-long long bytes_to_nsec(char *buffer)
+long long bytesToNanosec(char *buffer)
 {
+    // The host sends a little endian, second first then nanoseconds
     time_t sec = (buffer[3] << 24) | (buffer[2] << 16) | (buffer[1] << 8) | buffer[0];  
     int nsec = (buffer[7] << 24) | (buffer[6] << 16) | (buffer[5] << 8) | buffer[4];
     return ((long long) sec) * BILLION + (long long) nsec;
 }
 
-void as_timespec(long long t, struct timespec *T)
+void asTimespec(long long t, struct timespec *T)
 {
     T->tv_sec = (long) (t / BILLION);
     T->tv_nsec = (long) (t % BILLION);
     return;
 }
 
-int get_TPSN_data(int sock, struct timespec *T_skew)
+
+int getTPSNData(int sock, struct timespec *T_data)
 {
+    // TPSN requires receiving T2 and T3 of the server time to compute the
+    // clock difference. On top of that, we decided to encode some more
+    // communication protocol using the variables T2 and T3. 
+    // T2 is realistically bigger than 1. The protocol is as follows:
+    // (T2, T3) = (>1, >0) = expected T2 and T3 from the server received
+    // (T2, T3) = (1, ~) = TERMINATE
+    // (T2, T3) = (0, 0) = STOP IMAGING: Failed communication
+    // (T2, T3) = (0, >0) = STOP IMAGING:
+    //                      Session not started, wait for T3 amount
     int valread;
     char buffer[16] = {0}; 
 
     struct timespec T1 = {.tv_sec = 0, .tv_nsec = 0};
     struct timespec T4 = {.tv_sec = 0, .tv_nsec = 0};
     long long T1n, T2n, T3n, T4n;
-    long long T_skew_n = 0;
-    for (int i = 0; i < NUM_AVG; i++) {
+    long long T_data_n = 0;
+    for (int i = 0; i < NUM_TPSN_AVG; i++) {
         clock_gettime(CLOCK_MONOTONIC, &T1);
         // convert time_t to byte array
         char *T1_arr = (char *) &T1; // RPI is 32-bit so time_t is 32bit long
@@ -43,11 +54,9 @@ int get_TPSN_data(int sock, struct timespec *T_skew)
             printf("getting T3 and T4 from server failed\n");
             return -1;
         }
-        // Timestamp T4
-        clock_gettime(CLOCK_MONOTONIC, &T4);
         // Receive T2 and T3
-        T2n = bytes_to_nsec(buffer);
-        T3n = bytes_to_nsec(buffer+8);
+        T2n = bytesToNanosec(buffer);
+        T3n = bytesToNanosec(buffer+8);
         if (T2n == TERMINATE)
         {
             return TERMINATE;
@@ -57,32 +66,26 @@ int get_TPSN_data(int sock, struct timespec *T_skew)
             if (T3n != 0)
             {
                 // We have not begun operation yet
-                as_timespec(T3n, T_skew);
+                asTimespec(T3n, T_data);
             }
-            // Delay for T3 time
             return STOP_IMAGING;
-            
         }
-        
-        //time_t T3_sec_i = (buffer[11] << 24) | (buffer[10] << 16) | (buffer[9] << 8) | buffer[8];  
-        //int T3_nsec_i = (buffer[15] << 24) | (buffer[14] << 16) | (buffer[13] << 8) | buffer[12];
-        //struct timespec T2 = {.tv_sec = T2_sec_i, .tv_nsec=T2_nsec_i};
-        //T3.tv_sec = T3_sec_i;
-        //T3.tv_nsec = T3_nsec_i;
-        T1n = as_nsec(&T1);
-        //T2n = as_nsec(&T2);
-        //T3n = as_nsec(&T3);
-        T4n = as_nsec(&T4);
-        T_skew_n += ((T2n - T1n) - (T4n - T3n));
+        // Timestamp T4
+        clock_gettime(CLOCK_MONOTONIC, &T4);
+        T1n = asNanosec(&T1);
+        T4n = asNanosec(&T4);
+        T_data_n += ((T2n - T1n) - (T4n - T3n));
     }
     // compute average time skew
-    T_skew_n /= (NUM_AVG * 2);
-    as_timespec(T_skew_n, T_skew);
+    T_data_n /= (NUM_TPSN_AVG * 2);
+    asTimespec(T_data_n, T_data);
     return 0;
 }
 
-int synchronize(struct timeinfo *TI, uint8_t isFirst)
+
+int synchronize(struct timeinfo *TI, uint8_t is_sync)
 {
+    /* Setup a socket communication */
     int sock = 0; 
     struct sockaddr_in serv_addr; 
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
@@ -115,126 +118,56 @@ int synchronize(struct timeinfo *TI, uint8_t isFirst)
         return -1; 
     } 
 
-
+    /* Variable Configuration */
     char timeData[8];
     char status_buf[8] = {0};
     unsigned char ones[8] = {0xFF};
     char buffer[16] = {0}; 
 
+    /* get TPSN data for synchroniztion, check if other signals provided */
     struct timespec T_start;
-    struct timespec T_skew = {.tv_sec=0, .tv_nsec=0};
-    int tpsn_status = get_TPSN_data(sock, &T_skew);
-    long long T_skew_n = as_nsec(&T_skew);
+    struct timespec T_data = {.tv_sec=0, .tv_nsec=0};
+    int tpsn_status = getTPSNData(sock, &T_data);
     if (tpsn_status == -1 || tpsn_status == TERMINATE || tpsn_status == STOP_IMAGING)
     {
-        TI->T_skew_n = T_skew_n;
-    close(sock);
+        long long T_wait_n = asNanosec(&T_data);
+        TI->T_wait_n = T_wait_n;
+        close(sock);
         return tpsn_status;
     }
-    //as_timespec(T_skew_n, &T_skew);
-   // printf("%lld skew: %d.%d\n", T_skew_n, T_skew.tv_sec, T_skew.tv_nsec);
+    long long T_skew_n = asNanosec(&T_data);
+    TI->T_skew_n = T_skew_n;
 
-    // Ping the server to about start time
+    /* This was intended for skew calculation, stop here*/
+    if (!is_sync)
+    {
+        close(sock);
+        return 0;
+    }
+
+    /* Ping the server to about start and stop time */
     int start = 0, valread;
     long long temp_n=0, T_start_n = 0, T_stop_n=0;
-    while (!start)
+    while (!T_start_n)
     {
         usleep(10);
         send(sock, status_buf, 8, 0);
         valread = read(sock, buffer, 16);
-        /*if (valread == 0 && status_buf[4] == 1)
-        {
-            // the server has moved onto timer, so we will break
-            break;
-        }*/
-        temp_n = bytes_to_nsec(buffer);
-        //printf("%lld\n", temp_n);
+        temp_n = bytesToNanosec(buffer);
         if (temp_n > 1)
         {
             T_start_n = temp_n;
-            T_stop_n = bytes_to_nsec(buffer+8);
+            T_stop_n = bytesToNanosec(buffer+8);
             break;
-            //if (isFirst) status_buf[4] = 1;
         }
-        //start = (temp_n == 1) || !isFirst;
     }
     close(sock);
     
-//    printf("start: %lld\n", T_start_n);
     T_start_n -= T_skew_n;
     T_stop_n -= T_skew_n;
-    TI->T_skew_n = T_skew_n;
+    // Start 1ms after the LED trigger time to account for the 
+    // jitter in pulses (expected to be around 300us at most)
     TI->T_start_n = T_start_n + 1000000;
     TI->T_stop_n = T_stop_n;
-    return 0;
-    //struct timespec T_delay = {.tv_sec = 5, .tv_nsec = 0};
-    //long long T_delay_n = as_nsec(&T_delay);
-    //long long T_start_n = T3n - T_skew_n + T_delay_n;
-    // as_timespec(T_start_n, &T_start);
-}
-
-// TODO: FIgure out
-
-int get_skew(struct timeinfo* TI)
-{
-    int sock = 0; 
-    struct sockaddr_in serv_addr; 
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
-    { 
-        printf("\n Socket creation error \n"); 
-        return -1; 
-    } 
-   
-    struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
-    serv_addr.sin_family = AF_INET; 
-    serv_addr.sin_port = htons(PORT); 
-       
-    // Convert IPv4 and IPv6 addresses from text to binary form 
-    if(inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr)<=0)  
-    { 
-        printf("\nInvalid address/ Address not supported \n"); 
-    close(sock);
-        return -1; 
-    } 
-
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) 
-    { 
-        printf("\nConnection Failed \n"); 
-    close(sock);
-        return -1; 
-    }
-    
-
-    // Compute the skew upon averaging using TPSN
-    struct timespec T_start;
-    struct timespec T_skew;
-    int tpsn_status = get_TPSN_data(sock, &T_skew);
-    TI->T_skew_n = as_nsec(&T_skew);
-    if (tpsn_status == -1 || tpsn_status == TERMINATE || tpsn_status == STOP_IMAGING)
-    {
-    close(sock);
-        return tpsn_status;
-    }
-    //as_timespec(T_skew_n, &T_skew);
-    // // Ping the server to about next trigger time
-    // // send 2
-    // char status_buf[8] = {0};
-    // status_buf[4] = 2;
-    // char buffer[16] = {0}; 
-
-    // int start = 0, valread;
-    // long long T_start_n = 0;
-    // send(sock, status_buf, 8, 0);
-    // valread = read(sock, buffer, 16);
-    // if (valread != 16) {
-    //     return -1;
-    // }
-    // T_start_n = bytes_to_nsec(buffer);
-
-    close(sock);
-
     return 0;
 }

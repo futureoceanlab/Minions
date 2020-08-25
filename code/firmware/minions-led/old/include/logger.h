@@ -1,11 +1,3 @@
-/**
- * logger: class for handling file io to log data or messages.
- * 
- * author: Junsu Jang (junsuj@mit.edu)
- * date: Aug 25th, 2020
- * 
- */
-
 #ifndef LOGGER_H
 #define LOGGER_H
 
@@ -30,7 +22,7 @@ public:
 
 private:
     uint8_t log_count;
-    uint8_t log_flush_count;
+    uint8_t log_flus_count;
     struct timespec T_now;
     long long t_nsec;
     std::string log_path;

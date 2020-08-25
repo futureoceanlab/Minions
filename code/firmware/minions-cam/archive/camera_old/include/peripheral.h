@@ -30,7 +30,7 @@ private:
     KellerLD *k_sensor;
 
     void setupPi();
-    void k_sensor_init();
+    void pSensorInit();
 };
 
 

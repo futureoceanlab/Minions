@@ -21,11 +21,13 @@ void Logger::open(std::string path)
     log_file.precision(2);
 }
 
+
 void Logger::write(std::string msg)
 {
     log_file << msg;
     log_file.flush();
 }
+
 
 void Logger::logData(std::string t_rtc, float pressure, float temperature)
 {

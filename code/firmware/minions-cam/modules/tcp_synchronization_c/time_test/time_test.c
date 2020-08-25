@@ -9,12 +9,12 @@
 
 #define BILLION 1000000000
 
-long long as_nsec(struct timespec *T)
+long long asNanosec(struct timespec *T)
 {
     return ((long long) T->tv_sec)*BILLION + (long long) T->tv_nsec;
 }
 
-void as_timespec(long long t, struct timespec *T)
+void asTimespec(long long t, struct timespec *T)
 {
     T->tv_sec = (long) (t/BILLION);
     T->tv_nsec = (long) (t % BILLION);
@@ -51,7 +51,7 @@ int main()
     time_t T1_sec_t = (T1_sec[3] << 24) | (T1_sec[2] << 16) | (T1_sec[1] << 8) | T1_sec[0];  
     int T1_nsec_t = (T1_nsec[3] << 24) | (T1_nsec[2] << 16) | (T1_nsec[1] << 8) | T1_nsec[0];
     int T1_sec_i = (int) T1_sec_t;
-    long long T1_sec_ll = as_nsec(&T1);
+    long long T1_sec_ll = asNanosec(&T1);
 //    T1_sec_ll = T1_sec_ll*BILLION + (long long) T1.tv_nsec;
     printf("%d %d %d %lld\n", T1_sec_t, T1_sec_t, T1_nsec_t, T1_sec_ll*1000000000 + T1_nsec_t);
     // printf("%d\n", T1.tv_nsec - T1_nsec_i);
@@ -69,7 +69,7 @@ int main()
     printf("%lld\n", T1_sec_ll - T2_sec_ll);
     printf("%lld, nsec= %d\n", T2_sec_ll/1000000000, T2.tv_nsec);
     struct timespec T3;
-    as_timespec(T2_sec_ll, &T3);
+    asTimespec(T2_sec_ll, &T3);
     printf("T3: %d %d\n", (long) T3.tv_sec, T3.tv_nsec);
 
     struct tm *gt2 = gmtime(&T2.tv_sec);

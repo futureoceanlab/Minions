@@ -247,11 +247,11 @@ void runCamera(int drift_period, int sync_period)
             }
             logInternalMsg("Sync: Successful communication");
             wait_count = 0;
-            as_timespec(TI.T_start_n, &T_trig);
+            asTimespec(TI.T_start_n, &T_trig);
             T_trig_n = TI.T_start_n;
             T_skew_now = TI.T_skew_n;
             T_drift_n = T_trig_n + drift_period*server_sec + server_sec/OFFSET;
-            as_timespec(T_drift_n, &T_drift);
+            asTimespec(T_drift_n, &T_drift);
             //
             // We are in a proper running status 
             //
@@ -263,7 +263,7 @@ void runCamera(int drift_period, int sync_period)
             {
                 session_status = SES_RUNNING;
                 T_sync_n = T_trig_n;
-                as_timespec(TI.T_stop_n, &T_stop);
+                asTimespec(TI.T_stop_n, &T_stop);
                 // Run simple_snapimage
                 // Trigger
                 status = makeTimer(&cameraTimerID, &T_trig, PERIOD, 0, &timer_handler);
@@ -287,7 +287,7 @@ void runCamera(int drift_period, int sync_period)
             logInternalMsg("Compute Drift");
             T_skew_prev = T_skew_now;
 			//clock_gettime(CLOCK_REALTIME, &now);
-            int skew_status = get_skew(&TI);
+            int skew_status = getSkew(&TI);
             if (skew_status == -1) 
             {
                 fDrift=0;
@@ -315,12 +315,12 @@ void runCamera(int drift_period, int sync_period)
             double server_period = double((T_skew_now - T_skew_prev)/drift_period + BILLION); 
             server_sec = (long long) (double(BILLION) * (double(BILLION)/server_period));
             T_trig_n += (drift_period+1) * server_sec;
-            as_timespec(T_trig_n, &T_trig);
+            asTimespec(T_trig_n, &T_trig);
             resetTimer(&cameraTimerID, &T_trig, server_sec*PERIOD);
 
             // reset synchronization time with new server second
             T_sync_n = T_sync_n + sync_period * server_sec + server_sec/OFFSET;
-            as_timespec(T_sync_n, &T_sync);
+            asTimespec(T_sync_n, &T_sync);
             if (!hasSyncTimer)
             {
                 makeTimer(&syncTimerID, &T_sync, 0, 0, &timer_handler); //TEN_MIN, server_sec/4);

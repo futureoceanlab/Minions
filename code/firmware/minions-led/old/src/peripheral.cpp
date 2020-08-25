@@ -16,7 +16,7 @@ int Peripheral::init()
 {
     // WiringPI and GPIO
     setupPi();
-    //pSensorInit();
+    pSensorInit();
 }
 
 void Peripheral::pSensorInit()

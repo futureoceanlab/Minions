@@ -1,3 +1,11 @@
+/**
+ * utility: general purpose functions come here. 
+ * 
+ * author: Junsu Jang (junsuj@mit.edu)
+ * date: Aug 25th, 2020
+ * 
+ */
+
 #ifndef UTILITY_H
 #define UTILITY_H
 

@@ -1,3 +1,11 @@
+/**
+ * logger: class for handling file io to log data or messages.
+ * 
+ * author: Junsu Jang (junsuj@mit.edu)
+ * date: Aug 25th, 2020
+ * 
+ */
+
 #ifndef LOGGER_H
 #define LOGGER_H
 

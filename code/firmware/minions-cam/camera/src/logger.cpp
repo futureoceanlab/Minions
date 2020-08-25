@@ -30,7 +30,7 @@ void Logger::write(std::string msg)
 void Logger::logData(std::string t_rtc, float pressure, float temperature)
 {
     clock_gettime(CLOCK_MONOTONIC, &T_now);
-    t_nsec = as_nsec(&T_now);
+    t_nsec = asNanosec(&T_now);
     log_file << t_nsec << ",";
     log_file << t_rtc << ",";
     log_file << pressure << ",";
@@ -46,7 +46,7 @@ void Logger::logData(std::string t_rtc, float pressure, float temperature)
 void Logger::logMsg(std::string msg)
 {
     clock_gettime(CLOCK_MONOTONIC, &T_now);
-    t_nsec = as_nsec(&T_now);
+    t_nsec = asNanosec(&T_now);
     log_file << t_nsec;
     log_file << " ";
     log_file << msg;

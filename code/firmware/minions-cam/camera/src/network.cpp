@@ -1,7 +1,7 @@
 #include "network.h"
 
 
-void configure_master_socket(int *master_socket, int *opt, struct sockaddr_in *address)
+void configureMasterSocket(int *master_socket, int *opt, struct sockaddr_in *address)
 {
     //create a master socket  
     if( (*master_socket = socket(AF_INET , SOCK_STREAM , 0)) == 0)   
@@ -40,7 +40,7 @@ void configure_master_socket(int *master_socket, int *opt, struct sockaddr_in *a
     }   
 }
 
-int handle_connection(fd_set *readfds, int *master_socket, struct sockaddr_in *address, int addrlen, int client_socket[], int max_clients)
+int handleConnection(fd_set *readfds, int *master_socket, struct sockaddr_in *address, int addrlen, int client_socket[], int max_clients)
 {
     int sd, max_sd, new_socket;
     struct timeval tv;

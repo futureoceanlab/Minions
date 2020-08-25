@@ -4,7 +4,8 @@
 
 bool isNotAlnum(char c);
 
-std::string runScript(std::string command) {
+// Run a bash script on c++ and deliver the returned string
+std::string run_script(std::string command) {
    char buffer[128];
    std::string result = "";
 
@@ -26,12 +27,13 @@ std::string runScript(std::string command) {
    return result;
 }
 
+// Wrapper function for !isalnum
 bool isNotAlnum(char c)
 {
     return std::isalnum(c) == 0;
 }
 
-
+//  General timer creater
 int makeTimer(timer_t *timerID, struct timespec *T_timer_start, int it_sec, int it_nsec, void (*handler)(int, siginfo_t*, void*))
 {
     // varaibles
@@ -40,6 +42,7 @@ int makeTimer(timer_t *timerID, struct timespec *T_timer_start, int it_sec, int 
     struct itimerspec tim_spec = {.it_interval= {.tv_sec=it_sec,.tv_nsec=it_nsec},
                     .it_value = *T_timer_start};
 
+    // Create the signal and assign it to a provided handler function
     act.sa_flags = SA_SIGINFO | SA_RESTART;
     act.sa_sigaction = handler;
     sigemptyset(&act.sa_mask);
@@ -49,6 +52,7 @@ int makeTimer(timer_t *timerID, struct timespec *T_timer_start, int it_sec, int 
         perror("timer alert failed");
         return -1;
     }
+
     // Timer setup
     te.sigev_notify = SIGEV_SIGNAL;
     te.sigev_signo = SIGALRM;
@@ -64,16 +68,5 @@ int makeTimer(timer_t *timerID, struct timespec *T_timer_start, int it_sec, int 
         return -1;
     }
     return 0;
-}
-
-
-void resetTimer(timer_t *timerID, struct timespec *T_start, long long t_nsec)
-{
-    int it_sec = (int) (t_nsec / BILLION);
-    int it_nsec = (int) (t_nsec % BILLION);
-    struct itimerspec tim_spec = {.it_interval= {.tv_sec=it_sec,.tv_nsec=it_nsec},
-                    .it_value = *T_start};
-    if (timer_settime(*timerID, TIMER_ABSTIME, &tim_spec, NULL))
-        perror("timer_settime"); 
 }
 

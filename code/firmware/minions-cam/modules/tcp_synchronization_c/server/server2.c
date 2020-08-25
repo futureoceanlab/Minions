@@ -74,7 +74,7 @@ void handler(int signo)
 /**
  * Conversion from timespec to 64-bit long nanoseconds for easy arithematic
  */
-long long as_nsec(struct timespec *T)
+long long asNanosec(struct timespec *T)
 {
     return ((long long) T->tv_sec)*BILLION + (long long) T->tv_nsec;
 }
@@ -83,7 +83,7 @@ long long as_nsec(struct timespec *T)
 /**
  * Convert bytes received by clients into 64-bit long nanoseconds
  */
-long long bytes_to_nsec(char *buffer)
+long long bytesToNanosec(char *buffer)
 {
     time_t sec = (buffer[3] << 24) | (buffer[2] << 16) | (buffer[1] << 8) | buffer[0];
     int nsec = (buffer[7] << 24) | (buffer[6] << 16) | (buffer[5] << 8) | buffer[4];
@@ -93,7 +93,7 @@ long long bytes_to_nsec(char *buffer)
 /**
  * Convert 64-bit long nanoseconds into timespec
  */
-void as_timespec(long long t, struct timespec *T)
+void asTimespec(long long t, struct timespec *T)
 {
     T->tv_sec = (long) (t/BILLION);
     T->tv_nsec = (long) (t % BILLION);
@@ -267,7 +267,7 @@ int main(int argc , char *argv[])
                 else 
                 {   
                     clock_gettime(CLOCK_REALTIME, &T2);
-                    long long rec_T = bytes_to_nsec(buffer);
+                    long long rec_T = bytesToNanosec(buffer);
                     // clients are responding with its T1 value to receive
                     // more time information for synchronization
                     if (rec_T > 1) 
@@ -296,9 +296,9 @@ int main(int argc , char *argv[])
                         {
                             if (T_start.tv_sec == 0 && T_start.tv_nsec == 0)
                             {
-                                long long T2n = as_nsec(&T2);
+                                long long T2n = asNanosec(&T2);
                                 T2n += 2*BILLION;
-                                as_timespec(T2n, &T_start);
+                                asTimespec(T2n, &T_start);
                             }
                         }
                         send(sd, (char *) &T_start, 8, 0);

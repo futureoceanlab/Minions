@@ -297,7 +297,7 @@ int runLED()
             {
                 // clients are responding with its T1 value to receive
                 // more time information for synchronization
-                long long rec_T = bytes_to_nsec(buffer);
+                long long rec_T = bytesToNanosec(buffer);
                 char timeData[16] = {0};
                 if (rec_T > 1) 
                 {
@@ -451,14 +451,14 @@ int handleSyncRequest(char timeData[], int cli_id)
             {
                 // Find the waiting duration until the next session
                 struct timespec T_wait; 
-                long long T_wait_n = (T_session_start_n + (cur_session-1)*session_period*BILLION) - as_nsec(&T2);
+                long long T_wait_n = (T_session_start_n + (cur_session-1)*session_period*BILLION) - asNanosec(&T2);
 
                 msg_stream.str("");
                 msg_stream << "Client " << cli_id  << " sleep for " << T_wait_n/BILLION << " seconds";
                 logInternalMsg(msg_stream.str());
                 
                 // Respond wait duration 
-                as_timespec(T_wait_n, &T_wait);
+                asTimespec(T_wait_n, &T_wait);
                 char *T_wait_arr = (char *) &(T_wait.tv_sec);
                 for (int j = 0; j < 8; j++) 
                 {
@@ -497,12 +497,12 @@ int handleTriggerRequest(char timeData[], long long trig_period, int cli_id)
     struct timespec T_last_trig;
     // Add however many triggers have been made so far
     long long last_trigger = T_start_n + (count * trig_period);
-    as_timespec(last_trigger, &T_last_trig);
+    asTimespec(last_trigger, &T_last_trig);
 
     // Tell them when this session is expected to end
     long long T_end_n = T_session_end_n + (cur_session-1)*session_period*BILLION;
     struct timespec T_cur_end;
-    as_timespec(T_end_n, &T_cur_end);
+    asTimespec(T_end_n, &T_cur_end);
 
     // Formulate the response 
     char *data1 = (char *) &(T_last_trig);
@@ -564,10 +564,10 @@ int handleSessionChange(long long trig_period)
         clock_gettime(CLOCK_MONOTONIC, &T_now);
 
         // Setup start time of this sesssion
-        T_start_n = as_nsec(&T_now) + 2*BILLION;
-        as_timespec(T_start_n, &T_start);
+        T_start_n = asNanosec(&T_now) + 2*BILLION;
+        asTimespec(T_start_n, &T_start);
         struct timespec T_Period = {.tv_sec=0, .tv_nsec=0};
-        as_timespec(trig_period, &T_Period);
+        asTimespec(trig_period, &T_Period);
 
         // Make a timer for LED strobing
         makeTimer(&ledTimerID, &T_start, T_Period.tv_sec, T_Period.tv_nsec, &timerHandler);
@@ -591,11 +591,11 @@ int startMission()
     // Timestamp current time
     clock_gettime(CLOCK_MONOTONIC, &T_now);
     // Session start time 
-    long long T_now_n =  as_nsec(&T_now);
+    long long T_now_n =  asNanosec(&T_now);
     T_session_start_n = T_now_n + (long long) wait_duration*BILLION;
     T_session_end_n = T_session_start_n + (long long) session_duration*BILLION;
-    as_timespec(T_session_start_n, &T_session_start);
-    as_timespec(T_session_end_n, &T_session_end); 
+    asTimespec(T_session_start_n, &T_session_start);
+    asTimespec(T_session_end_n, &T_session_end); 
 
     // Create timer to start the sessions
     makeTimer(&imageStartTimerID, &T_session_start, session_period, 0, &timerHandler);

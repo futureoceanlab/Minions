@@ -16,10 +16,10 @@ int Peripheral::init()
 {
     // WiringPI and GPIO
     setupPi();
-    //k_sensor_init();
+    //pSensorInit();
 }
 
-void Peripheral::k_sensor_init()
+void Peripheral::pSensorInit()
 {
     k_sensor = new KellerLD(i2c_bus);
     k_sensor->init();

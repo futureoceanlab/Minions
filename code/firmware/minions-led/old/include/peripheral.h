@@ -1,22 +1,13 @@
-/**
- * peripheral: a class to handle communication with the peripheral
- * electronics (e.g., RTC, pressure sensor, GPIO, etc...)
- * 
- * author: Junsu Jang (junsuj@mit.edu)
- * date: Aug 25th, 2020
- * 
- */
-
 #ifndef PERIPHERAL_H
 #define PERIPHERAL_H
 
 #include "KellerLD.h"
 
 #define I2C_BUS 1 
-#define LED_EN_PIN 22
-#define LED_FAULT_PIN 21
-#define LED_PIN 23 
-#define TRIG_PIN 5
+#define LED_EN_PIN 22 // 17 
+#define LED_FAULT_PIN 21 //18
+#define LED_PIN 23 //4 //23
+#define TRIG_PIN 5 //24
 
 class Peripheral
 {
