@@ -38,6 +38,8 @@ typedef struct
    	cv::Mat frame; 
 } CUSTOMDATA;
 
+int roi_l, width, height;
+
 /**
  * List available properties helper function.
  */
@@ -100,10 +102,10 @@ GstFlowReturn new_frame_cb(GstAppSink *appsink, gpointer data)
             // Define ROI to compute the contrast
             int x_offset = -0;
             int y_offset = 0;
-            int xl = width/2-250+x_offset;
-            int yl = height/2-250+y_offset;
+            int xl = width/2-roi_l/2+x_offset;
+            int yl = height/2-roi_l/2+y_offset;
             // Focus on the center 500x500px
-            cv::Rect rect(xl, yl, 500, 500);
+            cv::Rect rect(xl, yl, roi_l, roi_l);
 
             cv::rectangle(img, rect, cv::Scalar(255), 1);
             cv::circle(img, cv::Point(width/2+x_offset, height/2+y_offset), 
@@ -153,6 +155,42 @@ GstFlowReturn new_frame_cb(GstAppSink *appsink, gpointer data)
  */ 
 int main(int argc, char **argv)
 {
+    std::cout << argc << std::endl;
+    char *sn;
+    for (int i =0; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-s") == 0)
+        {
+            sn = argv[i+1];
+        }
+        else if (strcmp(argv[i], "-x") == 0)
+        {
+            width = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-y") == 0)
+        {
+            height = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-r") == 0)
+        {
+            roi_l = atoi(argv[i+1]);
+        }
+        else if (strcmp(argv[i], "-h") == 0)
+        {
+            std::cout << "\t-s\tcamera serial number (8 digits)\n\
+            -x\tnumber of pixels on the image frame along the x-axis(width)\n\
+            -y\tnumber of pixels on the iamge frame along the y-axis(height)\n\
+            -r\tlength of a side of a region of interest\n" << std::endl;
+            return 0;
+        }
+    }
+    if (argc < 9) {
+        std::cout << "Please provide at least the serial number,\
+width and height of the image frame and the length of region of interest.\
+ Type -h for help.\n" << std::endl;
+        return -1;
+    }
+    argc = 1;
     gst_init(&argc, &argv);
     // Declare custom data structure for the callback
     CUSTOMDATA CustomData;
@@ -164,10 +202,10 @@ int main(int argc, char **argv)
     printf("Tcam OpenCV Image Sample\n");
 
     // Open camera by serial number
-    TcamCamera cam("43810451");//"15410110");
+    TcamCamera cam(sn);//"15410110");
     
     // Set video format, resolution and frame rate
-    cam.set_capture_format("GRAY8", FrameSize{2592,1944}, FrameRate{15,1});
+    cam.set_capture_format("GRAY8", FrameSize{width,height}, FrameRate{15,2});
 
     // Comment following line, if no live video display is wanted.
     cam.enable_video_display(gst_element_factory_make("ximagesink", NULL));
@@ -208,7 +246,7 @@ int main(int argc, char **argv)
     // Uncomment following line, if properties shall be listed. Many of the
     // properties that are done in software are available after the stream 
     // has started. Focus Auto is one of them.
-    ListProperties(cam);
+    // ListProperties(cam);
 
     for( int i = 0; i< 1000000; i++)
     {
