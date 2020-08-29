@@ -7,8 +7,9 @@ mkdir build
 cd build 
 cmake ..
 make
-./singleFocus
+./singleFocus -s 12345678 -x 2592 -y 1944 -r 500
 ```
+The input arguments are serial number, image frame width, height and region of interest length
 
 ### Required packages
 To run the code, one needs OpenCV and 
